@@ -1,16 +1,14 @@
-import { useState } from 'react'
-import { getCrew, saveCrew } from '../lib/crew'
+import { useState, useEffect } from 'react'
+import { getCrew, createCrew, updateCrew, deleteCrew } from '../lib/crew'
 
 const EMPTY = { name: '', role: '', phone: '', rrn: '', memo: '' }
 
-// 주민등록번호 자동 하이픈 포맷 (입력 중)
 const formatRrn = (raw) => {
   const digits = raw.replace(/\D/g, '').slice(0, 13)
   if (digits.length <= 6) return digits
   return digits.slice(0, 6) + '-' + digits.slice(6)
 }
 
-// 목록 마스킹: 앞 6자리만 표시
 const maskRrn = (rrn) => {
   if (!rrn) return null
   const digits = rrn.replace(/\D/g, '')
@@ -19,24 +17,40 @@ const maskRrn = (rrn) => {
 }
 
 export default function Crew() {
-  const [crew, setCrew] = useState(getCrew)
+  const [crew, setCrew] = useState([])
+  const [loading, setLoading] = useState(true)
   const [editing, setEditing] = useState(null)
-  const [revealId, setRevealId] = useState(null) // 주민번호 공개 중인 행 id
+  const [revealId, setRevealId] = useState(null)
 
-  const handleSave = (member) => {
-    const updated = member.id
-      ? crew.map(c => c.id === member.id ? member : c)
-      : [...crew, { ...member, id: Date.now().toString() }]
-    saveCrew(updated)
-    setCrew(updated)
-    setEditing(null)
+  useEffect(() => { load() }, [])
+
+  const load = async () => {
+    setLoading(true)
+    try { setCrew(await getCrew()) }
+    catch (e) { console.error(e) }
+    finally { setLoading(false) }
   }
 
-  const handleDelete = (id) => {
+  const handleSave = async (member) => {
+    try {
+      if (member.id) {
+        const { id, created_at, ...fields } = member
+        const updated = await updateCrew(id, fields)
+        setCrew(prev => prev.map(c => c.id === id ? updated : c))
+      } else {
+        const created = await createCrew(member)
+        setCrew(prev => [...prev, created])
+      }
+      setEditing(null)
+    } catch (e) { alert('저장 실패: ' + e.message) }
+  }
+
+  const handleDelete = async (id) => {
     if (!confirm('삭제하시겠습니까?')) return
-    const updated = crew.filter(c => c.id !== id)
-    saveCrew(updated)
-    setCrew(updated)
+    try {
+      await deleteCrew(id)
+      setCrew(prev => prev.filter(c => c.id !== id))
+    } catch (e) { alert('삭제 실패: ' + e.message) }
   }
 
   return (
@@ -61,7 +75,9 @@ export default function Crew() {
             </tr>
           </thead>
           <tbody>
-            {crew.length === 0 ? (
+            {loading ? (
+              <tr><td colSpan={6} style={{ padding: 40, textAlign: 'center', color: '#94a3b8', fontSize: 13 }}>불러오는 중...</td></tr>
+            ) : crew.length === 0 ? (
               <tr>
                 <td colSpan={6} style={{ padding: 48, textAlign: 'center', color: '#94a3b8', fontSize: 13 }}>
                   <div style={{ fontSize: 28, marginBottom: 8 }}>👤</div>
@@ -78,14 +94,11 @@ export default function Crew() {
                   onMouseEnter={e => e.currentTarget.style.background = '#f0f9ff'}
                   onMouseLeave={e => e.currentTarget.style.background = idx % 2 === 1 ? '#fafafa' : '#fff'}
                 >
-                  <td style={{ padding: '12px 16px', fontWeight: 700, fontSize: 14, color: '#0f172a' }}>
-                    {member.name}
-                  </td>
+                  <td style={{ padding: '12px 16px', fontWeight: 700, fontSize: 14, color: '#0f172a' }}>{member.name}</td>
                   <td style={{ padding: '12px 16px' }}>
                     {member.role
                       ? <span style={{ background: '#f1f5f9', color: '#475569', padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 500 }}>{member.role}</span>
-                      : <span style={{ color: '#cbd5e1', fontSize: 12 }}>-</span>
-                    }
+                      : <span style={{ color: '#cbd5e1', fontSize: 12 }}>-</span>}
                   </td>
                   <td style={{ padding: '12px 16px', fontSize: 13, color: '#64748b' }}>
                     {member.phone || <span style={{ color: '#cbd5e1' }}>-</span>}
@@ -96,17 +109,13 @@ export default function Crew() {
                         <span style={{ fontFamily: 'monospace', fontSize: 13, color: '#374151', letterSpacing: '0.5px' }}>
                           {isRevealed ? member.rrn : masked}
                         </span>
-                        <button
-                          onClick={() => setRevealId(isRevealed ? null : member.id)}
-                          style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 13, padding: '2px 4px', color: '#94a3b8', lineHeight: 1 }}
-                          title={isRevealed ? '숨기기' : '보기'}
-                        >
+                        <button onClick={() => setRevealId(isRevealed ? null : member.id)}
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 13, padding: '2px 4px', color: '#94a3b8' }}
+                          title={isRevealed ? '숨기기' : '보기'}>
                           {isRevealed ? '🙈' : '👁'}
                         </button>
                       </div>
-                    ) : (
-                      <span style={{ color: '#cbd5e1', fontSize: 12 }}>-</span>
-                    )}
+                    ) : <span style={{ color: '#cbd5e1', fontSize: 12 }}>-</span>}
                   </td>
                   <td style={{ padding: '12px 16px', fontSize: 12, color: '#94a3b8', maxWidth: 200 }}>{member.memo || ''}</td>
                   <td style={{ padding: '12px 16px' }}>
@@ -132,16 +141,17 @@ export default function Crew() {
 function CrewModal({ member, onClose, onSave }) {
   const [form, setForm] = useState({ ...member })
   const [showRrn, setShowRrn] = useState(false)
+  const [saving, setSaving] = useState(false)
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
-  const handleRrnChange = (e) => {
-    set('rrn', formatRrn(e.target.value))
-  }
+  const handleRrnChange = (e) => set('rrn', formatRrn(e.target.value))
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault()
     if (!form.name.trim()) { alert('이름을 입력해주세요'); return }
-    onSave(form)
+    setSaving(true)
+    await onSave(form)
+    setSaving(false)
   }
 
   return (
@@ -159,17 +169,11 @@ function CrewModal({ member, onClose, onSave }) {
           ].map(([label, key, type, placeholder]) => (
             <div key={key} style={{ marginBottom: 14 }}>
               <label style={labelStyle}>{label}</label>
-              <input
-                type={type}
-                value={form[key] || ''}
-                onChange={e => set(key, e.target.value)}
-                placeholder={placeholder}
-                style={inputStyle}
-              />
+              <input type={type} value={form[key] || ''} onChange={e => set(key, e.target.value)}
+                placeholder={placeholder} style={inputStyle} />
             </div>
           ))}
 
-          {/* 주민등록번호 — 별도 처리 */}
           <div style={{ marginBottom: 14 }}>
             <label style={labelStyle}>주민등록번호</label>
             <div style={{ position: 'relative' }}>
@@ -181,23 +185,22 @@ function CrewModal({ member, onClose, onSave }) {
                 maxLength={14}
                 style={{ ...inputStyle, fontFamily: 'monospace', letterSpacing: '1px', paddingRight: 44 }}
               />
-              <button
-                type="button"
-                onClick={() => setShowRrn(v => !v)}
+              <button type="button" onClick={() => setShowRrn(v => !v)}
                 style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', fontSize: 15, color: '#94a3b8', padding: 2 }}
-                title={showRrn ? '숨기기' : '보기'}
-              >
+                title={showRrn ? '숨기기' : '보기'}>
                 {showRrn ? '🙈' : '👁'}
               </button>
             </div>
             <p style={{ fontSize: 11, color: '#94a3b8', marginTop: 5 }}>
-              🔒 이 기기의 브라우저에만 저장됩니다
+              🔒 Supabase 데이터베이스에 암호화 저장됩니다
             </p>
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
             <button type="button" onClick={onClose} style={btnCancel}>취소</button>
-            <button type="submit" style={btnPrimary}>저장</button>
+            <button type="submit" disabled={saving} style={{ ...btnPrimary, opacity: saving ? 0.7 : 1 }}>
+              {saving ? '저장 중...' : '저장'}
+            </button>
           </div>
         </form>
       </div>

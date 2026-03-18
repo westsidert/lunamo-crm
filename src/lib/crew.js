@@ -1,8 +1,24 @@
-const CREW_KEY = 'crew_list'
+import { supabase } from './supabase'
 
-export const getCrew = () => {
-  try { return JSON.parse(localStorage.getItem(CREW_KEY) || '[]') }
-  catch { return [] }
+export const getCrew = async () => {
+  const { data, error } = await supabase.from('crew').select('*').order('created_at')
+  if (error) throw error
+  return data
 }
 
-export const saveCrew = (list) => localStorage.setItem(CREW_KEY, JSON.stringify(list))
+export const createCrew = async (member) => {
+  const { data, error } = await supabase.from('crew').insert(member).select().single()
+  if (error) throw error
+  return data
+}
+
+export const updateCrew = async (id, member) => {
+  const { data, error } = await supabase.from('crew').update(member).eq('id', id).select().single()
+  if (error) throw error
+  return data
+}
+
+export const deleteCrew = async (id) => {
+  const { error } = await supabase.from('crew').delete().eq('id', id)
+  if (error) throw error
+}
