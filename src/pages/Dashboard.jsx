@@ -61,6 +61,39 @@ export default function Dashboard() {
   // 결제 주기별 월 환산 금액
   const feMonthly = (fe) => Math.round(fe.amount / ({ '월간': 1, '분기': 3, '연간': 12 }[fe.billing_cycle] ?? 1))
 
+  // 다음 결제까지 남은 일수
+  const nextPaymentDays = (fe) => {
+    const now = new Date(); now.setHours(0,0,0,0)
+    const candidates = []
+    if (fe.billing_cycle === '월간') {
+      for (let i = 0; i <= 1; i++) candidates.push(new Date(now.getFullYear(), now.getMonth() + i, fe.billing_day))
+    } else if (fe.billing_cycle === '분기') {
+      const bm = (fe.billing_month || 1) - 1
+      for (let i = -1; i <= 5; i++) candidates.push(new Date(now.getFullYear(), bm + i * 3, fe.billing_day))
+    } else if (fe.billing_cycle === '연간') {
+      const bm = (fe.billing_month || 1) - 1
+      for (let i = 0; i <= 1; i++) candidates.push(new Date(now.getFullYear() + i, bm, fe.billing_day))
+    }
+    const future = candidates.filter(d => d >= now).sort((a, b) => a - b)
+    return future.length ? Math.round((future[0] - now) / 86400000) : 999
+  }
+
+  const billingDateLabel = (fe) => {
+    if (fe.billing_cycle === '연간') return `매년 ${fe.billing_month || 1}월 ${fe.billing_day}일`
+    if (fe.billing_cycle === '분기') {
+      const m = fe.billing_month || 1
+      return `${m}·${m+3}·${m+6}·${m+9}월 ${fe.billing_day}일`
+    }
+    return `매월 ${fe.billing_day}일`
+  }
+
+  // 다음 결제 예정 목록 (활성 항목, 30일 이내)
+  const upcomingPayments = fixedExpenses
+    .filter(fe => fe.is_active)
+    .map(fe => ({ ...fe, daysLeft: nextPaymentDays(fe) }))
+    .filter(fe => fe.daysLeft <= 30)
+    .sort((a, b) => a.daysLeft - b.daysLeft)
+
   // 특정 연/월에 활성인 고정비 합산 (월 환산 기준)
   const getMonthFixed = (yr, mo) => {
     const first = `${yr}-${String(mo).padStart(2, '0')}-01`

@@ -20,6 +20,34 @@ const CYCLE_LABEL = { '월간': '월', '분기': '분기', '연간': '년' }
 // amount 는 해당 주기의 실제 결제 금액, monthlyAmt 는 월 환산 금액
 const monthlyAmt = (fe) => Math.round(fe.amount / (CYCLE_DIV[fe.billing_cycle] ?? 1))
 
+// 결제일 표기
+const billingDateLabel = (fe) => {
+  if (fe.billing_cycle === '연간') return `매년 ${fe.billing_month || 1}월 ${fe.billing_day}일`
+  if (fe.billing_cycle === '분기') {
+    const m = fe.billing_month || 1
+    return `${m}·${m+3}·${m+6}·${m+9}월 ${fe.billing_day}일`
+  }
+  return `매월 ${fe.billing_day}일`
+}
+
+// 다음 결제까지 남은 일수
+const nextPaymentDays = (fe) => {
+  const now = new Date(); now.setHours(0,0,0,0)
+  const candidates = []
+  if (fe.billing_cycle === '월간') {
+    for (let i = 0; i <= 1; i++) candidates.push(new Date(now.getFullYear(), now.getMonth() + i, fe.billing_day))
+  } else if (fe.billing_cycle === '분기') {
+    const bm = (fe.billing_month || 1) - 1
+    for (let i = -1; i <= 5; i++) candidates.push(new Date(now.getFullYear(), bm + i * 3, fe.billing_day))
+  } else if (fe.billing_cycle === '연간') {
+    const bm = (fe.billing_month || 1) - 1
+    for (let i = 0; i <= 1; i++) candidates.push(new Date(now.getFullYear() + i, bm, fe.billing_day))
+  }
+  const future = candidates.filter(d => d >= now).sort((a, b) => a - b)
+  if (!future.length) return 999
+  return Math.round((future[0] - now) / 86400000)
+}
+
 const CAT_COLOR = {
   '임대료': '#2563eb', '소프트웨어': '#7c3aed', '통신비': '#0891b2',
   '인건비': '#d97706', '마케팅': '#059669', '기타': '#64748b',
@@ -119,7 +147,7 @@ export default function FixedExpenses() {
     const y = thisYear()
     const m = String(thisMonth()).padStart(2, '0')
     setForm({
-      name: '', amount: '', billing_cycle: '월간', billing_day: 25,
+      name: '', amount: '', billing_cycle: '월간', billing_day: 25, billing_month: 1,
       category: '소프트웨어', payment_method: '자동이체',
       start_date: `${y}-${m}-01`, end_date: '', is_active: true,
       currency: 'KRW', usdAmount: '', rate: '', rateLoading: false,
@@ -128,7 +156,7 @@ export default function FixedExpenses() {
   }
 
   const openEdit = (item) => {
-    setForm({ ...item, end_date: item.end_date || '', currency: 'KRW', usdAmount: '', rate: '', rateLoading: false })
+    setForm({ ...item, end_date: item.end_date || '', billing_month: item.billing_month || 1, currency: 'KRW', usdAmount: '', rate: '', rateLoading: false })
     setModal(item)
   }
 
@@ -159,6 +187,7 @@ export default function FixedExpenses() {
       usd_amount: form.currency === 'USD' ? Number(form.usdAmount) : null,
       billing_cycle: form.billing_cycle || '월간',
       billing_day: parseInt(form.billing_day) || 1,
+      billing_month: form.billing_cycle === '월간' ? null : parseInt(form.billing_month) || 1,
       category: form.category,
       payment_method: form.payment_method || null,
       start_date: form.start_date,
@@ -208,12 +237,9 @@ export default function FixedExpenses() {
   })).filter(c => c.count > 0)
 
   // 다음 결제가 오늘 기준 가장 가까운 항목 (활성만)
-  const thisDay = today.getDate()
-  const upcomingItems = activeThisMonth
-    .map(fe => ({
-      ...fe,
-      daysLeft: fe.billing_day >= thisDay ? fe.billing_day - thisDay : (new Date(viewYear, viewMonth, 0).getDate() - thisDay) + fe.billing_day,
-    }))
+  const upcomingItems = items
+    .filter(fe => fe.is_active)
+    .map(fe => ({ ...fe, daysLeft: nextPaymentDays(fe) }))
     .sort((a, b) => a.daysLeft - b.daysLeft)
     .slice(0, 3)
 
@@ -360,7 +386,7 @@ export default function FixedExpenses() {
                   <td style={{ padding: '12px 16px', color: fe.billing_cycle !== '월간' ? '#7c3aed' : '#94a3b8', fontWeight: fe.billing_cycle !== '월간' ? 600 : 400, fontSize: 12 }}>
                     {fe.billing_cycle !== '월간' ? `≈ ${formatKRW(monthlyAmt(fe))}원/월` : '—'}
                   </td>
-                  <td style={{ padding: '12px 16px', color: '#475569' }}>매월 {fe.billing_day}일</td>
+                  <td style={{ padding: '12px 16px', color: '#475569' }}>{billingDateLabel(fe)}</td>
                   <td style={{ padding: '12px 16px', color: '#64748b' }}>{fe.payment_method || '—'}</td>
                   <td style={{ padding: '12px 16px', color: '#64748b' }}>{fe.start_date}</td>
                   <td style={{ padding: '12px 16px', color: '#64748b' }}>{fe.end_date || '—'}</td>
@@ -596,9 +622,33 @@ export default function FixedExpenses() {
                     placeholder={form.billing_cycle === '연간' ? '연간 총액 (예: 1200000)' : form.billing_cycle === '분기' ? '분기 총액 (예: 300000)' : '월 금액 (예: 100000)'} />
                 </div>
               )}
+              {(form.billing_cycle === '분기') && (
+                <div>
+                  <label style={lbl}>분기 시작 월 *</label>
+                  <select value={form.billing_month || 1} onChange={e => f('billing_month', Number(e.target.value))} style={inp}>
+                    <option value={1}>1월 시작 (1·4·7·10월)</option>
+                    <option value={2}>2월 시작 (2·5·8·11월)</option>
+                    <option value={3}>3월 시작 (3·6·9·12월)</option>
+                  </select>
+                </div>
+              )}
+              {(form.billing_cycle === '연간') && (
+                <div>
+                  <label style={lbl}>결제 월 *</label>
+                  <select value={form.billing_month || 1} onChange={e => f('billing_month', Number(e.target.value))} style={inp}>
+                    {Array.from({length:12},(_,i)=>i+1).map(m=><option key={m} value={m}>{m}월</option>)}
+                  </select>
+                </div>
+              )}
               <div>
-                <label style={lbl}>결제일 (매월 몇 일)</label>
-                <input type="number" min={1} max={31} value={form.billing_day || ''} onChange={e => f('billing_day', e.target.value)} style={inp} />
+                <label style={lbl}>
+                  {form.billing_cycle === '연간' ? '결제 일 *' : form.billing_cycle === '분기' ? '결제 일 *' : '결제일 (매월 몇 일)'}
+                </label>
+                <input type="number" min={1} max={31} value={form.billing_day || ''} onChange={e => f('billing_day', e.target.value)} style={inp}
+                  placeholder={form.billing_cycle === '연간' ? `${form.billing_month || 1}월 몇 일?` : '예: 25'} />
+                {form.billing_cycle !== '월간' && form.billing_month && form.billing_day && (
+                  <div style={{ fontSize: 11, color: '#2563eb', marginTop: 4 }}>{billingDateLabel({ billing_cycle: form.billing_cycle, billing_month: form.billing_month, billing_day: form.billing_day })}</div>
+                )}
               </div>
               <div>
                 <label style={lbl}>결제 수단</label>
