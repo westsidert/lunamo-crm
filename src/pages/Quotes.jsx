@@ -572,6 +572,8 @@ function QuoteWizard({ initial, clients, pastQuotes = [], onClose, onSave }) {
                       return subs.map(({ sub, items }) => {
                         const subRowCount = items.length
                         let subRendered = false
+                        // 첫 번째 항목명이 sub명과 같으면 rowSpan이 생성되지 않으므로 각 행마다 빈 td 필요
+                        const firstItemNameIsSub = items.length > 0 && items[0].name === sub
                         return items.map((item, itemIdx) => {
                           const key = itemKey(item)
                           const v   = values[key] || { day: '', qty: '', price: item.price }
@@ -605,7 +607,7 @@ function QuoteWizard({ initial, clients, pastQuotes = [], onClose, onSave }) {
                                 }}>
                                   {sub}
                                 </td>
-                              ) : !hasSub ? (
+                              ) : !hasSub || (hasSub && !showSub && firstItemNameIsSub) ? (
                                 <td style={{ borderRight: '1px solid #f1f5f9' }} />
                               ) : null}
                               <td style={{ padding: '5px 12px', fontSize: 13, color: isFilled ? '#1e40af' : '#374151', fontWeight: isFilled ? 600 : 400 }}>
