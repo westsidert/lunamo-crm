@@ -47,6 +47,9 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: '필수 필드 누락' })
   }
 
+  // Fluent Forms 타임아웃(5초) 전에 즉시 응답 — 실제 처리는 백그라운드에서 계속
+  res.status(200).json({ received: true })
+
   // 모든 key를 소문자+공백제거로 정규화해서 검색
   const flatBody = {}
   const normalize = (s) => String(s).toLowerCase().replace(/[\s_\-]/g, '')
@@ -281,9 +284,4 @@ ${itemsDesc}
     // 이메일 실패해도 견적 저장은 성공으로 처리
   }
 
-  return res.status(200).json({
-    success: true,
-    quote_id: quote.id,
-    project_title: aiData.project_title,
-  })
 }
