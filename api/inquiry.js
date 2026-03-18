@@ -222,7 +222,6 @@ ${itemsDesc}
       quote_id: quote.id,
       sort_order: i,
       category: it.cat,
-      sub_category: it.sub || '',
       contents: it.name,
       day: it.day || 1,
       qty: it.qty || 1,
