@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+import { waitUntil } from '@vercel/functions'
 
 // 사용 가능한 견적 항목
 const ALL_ITEMS = [
@@ -34,21 +35,22 @@ const ALL_ITEMS = [
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end()
 
-  const supabase = createClient(
-    process.env.VITE_SUPABASE_URL,
-    process.env.SUPABASE_SERVICE_ROLE_KEY,
-  )
-
-  // Fluent Forms 웹훅 데이터 파싱
   const body = req.body || {}
 
-  // body가 완전히 비어있으면 거부
   if (Object.keys(body).length === 0) {
     return res.status(400).json({ error: '필수 필드 누락' })
   }
 
-  // Fluent Forms 타임아웃(5초) 전에 즉시 응답 — 실제 처리는 백그라운드에서 계속
+  // 즉시 200 응답 — waitUntil로 백그라운드 처리 보장
   res.status(200).json({ received: true })
+  waitUntil(processInquiry(body))
+}
+
+async function processInquiry(body) {
+  const supabase = createClient(
+    process.env.VITE_SUPABASE_URL,
+    process.env.SUPABASE_SERVICE_ROLE_KEY,
+  )
 
   // 모든 key를 소문자+공백제거로 정규화해서 검색
   const flatBody = {}
