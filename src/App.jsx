@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import './index.css'
 import { supabase, isConfigured } from './lib/supabase'
+import { migrateToSupabase, syncFromSupabase } from './lib/settings'
 import Setup from './pages/Setup'
 import Login from './pages/Login'
 import Layout from './components/Layout'
@@ -22,6 +23,7 @@ function App() {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session)
       setAuthLoading(false)
+      if (session) migrateToSupabase().then(() => syncFromSupabase()).catch(console.error)
     })
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session)

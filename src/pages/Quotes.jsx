@@ -1179,7 +1179,7 @@ const getCompCompanies = () => {
   } catch {}
   return COMP_DEFAULTS
 }
-const setCompCompanies = (data) => localStorage.setItem('comp_companies', JSON.stringify(data))
+const setCompCompanies = (data) => { const v = JSON.stringify(data); localStorage.setItem('comp_companies', v); import('../lib/settings').then(m => m.saveSetting('comp_companies', v)) }
 
 const _sr = (n) => { const x = Math.sin(n + 1) * 10000; return x - Math.floor(x) }
 

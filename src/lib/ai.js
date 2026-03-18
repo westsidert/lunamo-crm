@@ -4,8 +4,8 @@ export const setAiKey = (k) => localStorage.setItem('anthropic_key', k.trim())
 
 export const getLogo  = () => localStorage.getItem('company_logo') || ''
 export const getStamp = () => localStorage.getItem('company_stamp') || ''
-export const setLogo  = (b64) => b64 ? localStorage.setItem('company_logo', b64) : localStorage.removeItem('company_logo')
-export const setStamp = (b64) => b64 ? localStorage.setItem('company_stamp', b64) : localStorage.removeItem('company_stamp')
+export const setLogo  = (b64) => { b64 ? localStorage.setItem('company_logo', b64) : localStorage.removeItem('company_logo'); import('./settings').then(m => m.saveSetting('company_logo', b64 || null)) }
+export const setStamp = (b64) => { b64 ? localStorage.setItem('company_stamp', b64) : localStorage.removeItem('company_stamp'); import('./settings').then(m => m.saveSetting('company_stamp', b64 || null)) }
 
 export const analyzeQuoteRequest = async (description, pastQuotes = [], allItems = []) => {
   const key = getAiKey()
