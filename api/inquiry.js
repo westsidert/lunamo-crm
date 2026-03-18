@@ -167,14 +167,12 @@ ${itemsDesc}
   if (clientId) quotePayload.client_id = clientId
   if (!clientId && company) quotePayload.client_name_override = company
 
-  // memo/status 컬럼이 있으면 추가 (없어도 에러 안 나도록 별도 처리)
-  const memoText = [
-    aiData.note ? `[AI 분석] ${aiData.note}` : '',
-    refLink ? `레퍼런스: ${refLink}` : '',
-    fileUrl ? `첨부파일: ${fileUrl}` : '',
-    content ? `원문 의뢰: ${content}` : '',
-  ].filter(Boolean).join('\n')
-  if (memoText) quotePayload.memo = memoText
+  // 금액 계산
+  const subTotal = (aiData.items || []).reduce((s, it) => s + ((it.day||1) * (it.qty||1) * (it.price||0)), 0)
+  quotePayload.sub_total = subTotal
+  quotePayload.total_with_vat = Math.round(subTotal * 1.1)
+  quotePayload.final_amount = Math.round(subTotal * 1.1)
+  quotePayload.status = '작성중'
 
   console.log('[inquiry] quote insert payload:', JSON.stringify(quotePayload))
 
@@ -208,7 +206,6 @@ ${itemsDesc}
   }
 
   // 4. 알림 이메일 발송
-  const subTotal = (aiData.items || []).reduce((s, it) => s + (it.day * it.qty * it.price), 0)
   const fmt = (n) => Number(n).toLocaleString('ko-KR')
 
   const itemRows = (aiData.items || []).map(it => `
