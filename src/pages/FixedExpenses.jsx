@@ -6,6 +6,12 @@ const CATEGORIES  = ['임대료', '소프트웨어', '통신비', '인건비', '
 const PAY_METHODS = ['자동이체', '법인카드', '계좌이체', '기타']
 const CYCLES      = ['월간', '분기', '연간']
 
+const fetchUsdRate = async () => {
+  const res = await fetch('https://open.er-api.com/v6/latest/USD')
+  const data = await res.json()
+  return Math.round(data.rates.KRW)
+}
+
 // 결제 주기별 월 환산 제수
 const CYCLE_DIV = { '월간': 1, '분기': 3, '연간': 12 }
 // 결제 주기 표기
@@ -59,24 +65,44 @@ export default function FixedExpenses() {
     setRentForm({
       date: now.toISOString().slice(0, 10),
       amount: '',
+      currency: 'KRW',
+      usdAmount: '',
+      rate: '',
+      rateLoading: false,
       payment_method: '계좌이체',
       note: '',
     })
     setRentModal(true)
   }
 
+  const loadRentRate = async () => {
+    setRentForm(p => ({ ...p, rateLoading: true }))
+    try {
+      const rate = await fetchUsdRate()
+      setRentForm(p => ({ ...p, rate: String(rate), rateLoading: false }))
+    } catch { setRentForm(p => ({ ...p, rateLoading: false })) }
+  }
+
   const saveRent = async () => {
-    if (!rentForm.amount || isNaN(Number(rentForm.amount))) return alert('금액을 입력하세요.')
-    const total = parseInt(rentForm.amount)
+    let total
+    if (rentForm.currency === 'USD') {
+      if (!rentForm.usdAmount || isNaN(Number(rentForm.usdAmount))) return alert('달러 금액을 입력하세요.')
+      if (!rentForm.rate || isNaN(Number(rentForm.rate))) return alert('환율을 입력하세요.')
+      total = Math.round(Number(rentForm.usdAmount) * Number(rentForm.rate))
+    } else {
+      if (!rentForm.amount || isNaN(Number(rentForm.amount))) return alert('금액을 입력하세요.')
+      total = parseInt(rentForm.amount)
+    }
     const supply = Math.round(total / 1.1)
     const vat = total - supply
     const d = new Date(rentForm.date)
     const label = `${d.getFullYear()}년 ${d.getMonth() + 1}월`
+    const usdNote = rentForm.currency === 'USD' ? ` (USD $${rentForm.usdAmount} × ${Number(rentForm.rate).toLocaleString()}원)` : ''
     try {
       const created = await createTransaction({
         type: '매입',
         item: '임대료',
-        memo: `[임대료] ${label}${rentForm.note ? ' · ' + rentForm.note : ''}`,
+        memo: `[임대료] ${label}${usdNote}${rentForm.note ? ' · ' + rentForm.note : ''}`,
         transaction_date: rentForm.date,
         supply_amount: supply,
         vat,
@@ -96,23 +122,41 @@ export default function FixedExpenses() {
       name: '', amount: '', billing_cycle: '월간', billing_day: 25,
       category: '소프트웨어', payment_method: '자동이체',
       start_date: `${y}-${m}-01`, end_date: '', is_active: true,
+      currency: 'KRW', usdAmount: '', rate: '', rateLoading: false,
     })
     setModal('add')
   }
 
   const openEdit = (item) => {
-    setForm({ ...item, end_date: item.end_date || '' })
+    setForm({ ...item, end_date: item.end_date || '', currency: 'KRW', usdAmount: '', rate: '', rateLoading: false })
     setModal(item)
+  }
+
+  const loadFormRate = async () => {
+    setForm(p => ({ ...p, rateLoading: true }))
+    try {
+      const rate = await fetchUsdRate()
+      setForm(p => ({ ...p, rate: String(rate), rateLoading: false }))
+    } catch { setForm(p => ({ ...p, rateLoading: false })) }
   }
 
   const f = (k, v) => setForm(prev => ({ ...prev, [k]: v }))
 
   const save = async () => {
     if (!form.name.trim()) return alert('항목명을 입력하세요.')
-    if (!form.amount || isNaN(Number(form.amount))) return alert('금액을 입력하세요.')
+    if ((form.currency || 'KRW') === 'KRW' && (!form.amount || isNaN(Number(form.amount)))) return alert('금액을 입력하세요.')
+    let krwAmount
+    if (form.currency === 'USD') {
+      if (!form.usdAmount || isNaN(Number(form.usdAmount))) return alert('달러 금액을 입력하세요.')
+      if (!form.rate || isNaN(Number(form.rate))) return alert('환율을 입력하세요.')
+      krwAmount = Math.round(Number(form.usdAmount) * Number(form.rate))
+    } else {
+      krwAmount = parseInt(form.amount)
+    }
     const payload = {
       name: form.name.trim(),
-      amount: parseInt(form.amount),
+      amount: krwAmount,
+      usd_amount: form.currency === 'USD' ? Number(form.usdAmount) : null,
       billing_cycle: form.billing_cycle || '월간',
       billing_day: parseInt(form.billing_day) || 1,
       category: form.category,
@@ -388,21 +432,75 @@ export default function FixedExpenses() {
                 <label style={lbl}>결제일 *</label>
                 <input type="date" value={rentForm.date || ''} onChange={e => setRentForm(p => ({ ...p, date: e.target.value }))} style={inp} />
               </div>
+
+              {/* 통화 선택 */}
               <div>
-                <label style={lbl}>금액 (원) * &nbsp;<span style={{ fontWeight: 400, color: '#94a3b8' }}>부가세 포함 총액</span></label>
-                <input
-                  type="number" autoFocus
-                  value={rentForm.amount || ''}
-                  onChange={e => setRentForm(p => ({ ...p, amount: e.target.value }))}
-                  style={{ ...inp, fontSize: 18, fontWeight: 700 }}
-                  placeholder="예: 1650000"
-                />
-                {rentForm.amount && !isNaN(Number(rentForm.amount)) && Number(rentForm.amount) > 0 && (
-                  <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>
-                    공급가 {formatKRW(Math.round(Number(rentForm.amount) / 1.1))}원 + 부가세 {formatKRW(Number(rentForm.amount) - Math.round(Number(rentForm.amount) / 1.1))}원
-                  </div>
-                )}
+                <label style={lbl}>통화</label>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  {['KRW', 'USD'].map(c => (
+                    <button key={c} onClick={() => setRentForm(p => ({ ...p, currency: c }))} style={{
+                      padding: '7px 18px', borderRadius: 8, border: '1px solid',
+                      borderColor: rentForm.currency === c ? '#2563eb' : '#e2e8f0',
+                      background: rentForm.currency === c ? '#2563eb' : '#fff',
+                      color: rentForm.currency === c ? '#fff' : '#64748b',
+                      cursor: 'pointer', fontSize: 13, fontWeight: 600,
+                    }}>{c === 'KRW' ? '원 (KRW)' : '달러 (USD)'}</button>
+                  ))}
+                </div>
               </div>
+
+              {rentForm.currency === 'USD' ? (
+                <>
+                  <div>
+                    <label style={lbl}>금액 (USD) *</label>
+                    <input
+                      type="number" autoFocus
+                      value={rentForm.usdAmount || ''}
+                      onChange={e => setRentForm(p => ({ ...p, usdAmount: e.target.value }))}
+                      style={{ ...inp, fontSize: 18, fontWeight: 700 }}
+                      placeholder="예: 29.99"
+                    />
+                  </div>
+                  <div>
+                    <label style={lbl}>
+                      환율 (원/달러) *&nbsp;
+                      <button onClick={loadRentRate} disabled={rentForm.rateLoading} style={{
+                        fontSize: 11, padding: '2px 8px', borderRadius: 6, border: '1px solid #2563eb',
+                        background: '#fff', color: '#2563eb', cursor: 'pointer', fontWeight: 600,
+                      }}>{rentForm.rateLoading ? '불러오는 중...' : '현재 환율 불러오기'}</button>
+                    </label>
+                    <input
+                      type="number"
+                      value={rentForm.rate || ''}
+                      onChange={e => setRentForm(p => ({ ...p, rate: e.target.value }))}
+                      style={inp}
+                      placeholder="예: 1380"
+                    />
+                    {rentForm.usdAmount && rentForm.rate && !isNaN(Number(rentForm.usdAmount)) && !isNaN(Number(rentForm.rate)) && (
+                      <div style={{ fontSize: 12, color: '#2563eb', marginTop: 5, fontWeight: 600 }}>
+                        → 원화 환산: {formatKRW(Math.round(Number(rentForm.usdAmount) * Number(rentForm.rate)))}원
+                      </div>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <div>
+                  <label style={lbl}>금액 (원) * &nbsp;<span style={{ fontWeight: 400, color: '#94a3b8' }}>부가세 포함 총액</span></label>
+                  <input
+                    type="number" autoFocus
+                    value={rentForm.amount || ''}
+                    onChange={e => setRentForm(p => ({ ...p, amount: e.target.value }))}
+                    style={{ ...inp, fontSize: 18, fontWeight: 700 }}
+                    placeholder="예: 1650000"
+                  />
+                  {rentForm.amount && !isNaN(Number(rentForm.amount)) && Number(rentForm.amount) > 0 && (
+                    <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>
+                      공급가 {formatKRW(Math.round(Number(rentForm.amount) / 1.1))}원 + 부가세 {formatKRW(Number(rentForm.amount) - Math.round(Number(rentForm.amount) / 1.1))}원
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div>
                 <label style={lbl}>비고 (선택)</label>
                 <input value={rentForm.note || ''} onChange={e => setRentForm(p => ({ ...p, note: e.target.value }))} style={inp} placeholder="예: 관리비 포함, 인상분 반영 등" />
@@ -446,17 +544,58 @@ export default function FixedExpenses() {
                 </select>
               </div>
               <div style={{ gridColumn: '1 / -1' }}>
-                <label style={lbl}>
-                  결제 금액 (원) * &nbsp;
-                  <span style={{ fontSize: 11, color: '#94a3b8', fontWeight: 400 }}>
-                    {form.billing_cycle && form.billing_cycle !== '월간' && form.amount
-                      ? `→ 월 환산 ≈ ${formatKRW(Math.round(Number(form.amount) / (CYCLE_DIV[form.billing_cycle] ?? 1)))}원/월`
-                      : form.billing_cycle === '연간' ? '연간 총액 입력 시 자동 월 환산' : form.billing_cycle === '분기' ? '분기 총액 입력 시 자동 월 환산' : ''}
-                  </span>
-                </label>
-                <input type="number" value={form.amount || ''} onChange={e => f('amount', e.target.value)} style={inp}
-                  placeholder={form.billing_cycle === '연간' ? '연간 총액 (예: 1200000)' : form.billing_cycle === '분기' ? '분기 총액 (예: 300000)' : '월 금액 (예: 100000)'} />
+                <label style={lbl}>통화</label>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  {['KRW', 'USD'].map(c => (
+                    <button key={c} onClick={() => f('currency', c)} style={{
+                      padding: '6px 14px', borderRadius: 8, border: '1px solid',
+                      borderColor: (form.currency || 'KRW') === c ? '#0f172a' : '#e2e8f0',
+                      background: (form.currency || 'KRW') === c ? '#0f172a' : '#fff',
+                      color: (form.currency || 'KRW') === c ? '#fff' : '#64748b',
+                      cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                    }}>{c === 'KRW' ? '원 (KRW)' : '달러 (USD)'}</button>
+                  ))}
+                </div>
               </div>
+
+              {(form.currency || 'KRW') === 'USD' ? (
+                <>
+                  <div>
+                    <label style={lbl}>금액 (USD) *</label>
+                    <input type="number" value={form.usdAmount || ''} onChange={e => f('usdAmount', e.target.value)} style={inp}
+                      placeholder={form.billing_cycle === '연간' ? '연간 총액 (예: 99.99)' : form.billing_cycle === '분기' ? '분기 총액 (예: 29.99)' : '월 금액 (예: 9.99)'} />
+                  </div>
+                  <div>
+                    <label style={lbl}>
+                      환율 (원/달러) *&nbsp;
+                      <button onClick={loadFormRate} disabled={form.rateLoading} style={{
+                        fontSize: 11, padding: '2px 8px', borderRadius: 6, border: '1px solid #0f172a',
+                        background: '#fff', color: '#0f172a', cursor: 'pointer', fontWeight: 600,
+                      }}>{form.rateLoading ? '불러오는 중...' : '현재 환율 불러오기'}</button>
+                    </label>
+                    <input type="number" value={form.rate || ''} onChange={e => f('rate', e.target.value)} style={inp} placeholder="예: 1380" />
+                    {form.usdAmount && form.rate && !isNaN(Number(form.usdAmount)) && !isNaN(Number(form.rate)) && (
+                      <div style={{ fontSize: 12, color: '#7c3aed', marginTop: 5, fontWeight: 600 }}>
+                        → 원화 환산: {formatKRW(Math.round(Number(form.usdAmount) * Number(form.rate)))}원
+                        {form.billing_cycle !== '월간' && ` (월 ≈ ${formatKRW(Math.round(Number(form.usdAmount) * Number(form.rate) / (CYCLE_DIV[form.billing_cycle] ?? 1)))}원)`}
+                      </div>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <label style={lbl}>
+                    결제 금액 (원) * &nbsp;
+                    <span style={{ fontSize: 11, color: '#94a3b8', fontWeight: 400 }}>
+                      {form.billing_cycle && form.billing_cycle !== '월간' && form.amount
+                        ? `→ 월 환산 ≈ ${formatKRW(Math.round(Number(form.amount) / (CYCLE_DIV[form.billing_cycle] ?? 1)))}원/월`
+                        : form.billing_cycle === '연간' ? '연간 총액 입력 시 자동 월 환산' : form.billing_cycle === '분기' ? '분기 총액 입력 시 자동 월 환산' : ''}
+                    </span>
+                  </label>
+                  <input type="number" value={form.amount || ''} onChange={e => f('amount', e.target.value)} style={inp}
+                    placeholder={form.billing_cycle === '연간' ? '연간 총액 (예: 1200000)' : form.billing_cycle === '분기' ? '분기 총액 (예: 300000)' : '월 금액 (예: 100000)'} />
+                </div>
+              )}
               <div>
                 <label style={lbl}>결제일 (매월 몇 일)</label>
                 <input type="number" min={1} max={31} value={form.billing_day || ''} onChange={e => f('billing_day', e.target.value)} style={inp} />
