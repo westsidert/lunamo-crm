@@ -39,41 +39,55 @@ export default async function handler(req, res) {
     process.env.SUPABASE_SERVICE_ROLE_KEY,
   )
 
-  // Fluent Forms 웹훅 데이터 파싱 (필드명이 다양할 수 있어 유연하게 처리)
+  // Fluent Forms 웹훅 데이터 파싱
   const body = req.body || {}
+
+  // body가 완전히 비어있으면 거부
+  if (Object.keys(body).length === 0) {
+    return res.status(400).json({ error: '필수 필드 누락' })
+  }
+
+  // 모든 key를 소문자+공백제거로 정규화해서 검색
+  const flatBody = {}
+  const normalize = (s) => String(s).toLowerCase().replace(/[\s_\-]/g, '')
+  for (const [k, v] of Object.entries(body)) {
+    flatBody[normalize(k)] = v
+  }
+
   const get = (...keys) => {
     for (const k of keys) {
-      const v = body[k] || body[k.replace(/ /g, '_')] || body[k.replace(/ /g, '-')]
-      if (v) return String(v).trim()
+      const nk = normalize(k)
+      if (flatBody[nk]) return String(flatBody[nk]).trim()
     }
     return ''
   }
 
-  const field   = get('문의분야', 'inquiry_type', 'category')
-  const company = get('업체명', 'company', 'company_name')
-  const contact = get('담당자 성함', '담당자', 'contact_name', 'name')
-  const phone   = get('연락처', 'phone', 'tel')
-  const email   = get('이메일', 'email')
-  const content = get('문의내용', 'message', 'inquiry', 'content')
-  const refLink = get('레퍼런스 영상 링크', 'reference', 'reference_link')
-  const fileUrl = get('첨부파일', 'attachment', 'file')
+  const field   = get('문의분야', 'inquirytype', 'category', 'type')
+  const company = get('업체명', 'companyname', 'company', 'organization')
+  const contact = get('담당자성함', '담당자', 'contactname', 'name', 'fullname')
+  const phone   = get('연락처', 'phone', 'tel', 'mobile')
+  const email   = get('이메일', 'email', 'mail')
+  const content = get('문의내용', 'message', 'inquiry', 'content', 'description', 'text')
+  const refLink = get('레퍼런스영상링크', 'reference', 'referencelink', 'url', 'link')
+  const fileUrl = get('첨부파일', 'attachment', 'file', 'fileurl')
 
-  if (!content && !company) {
-    return res.status(400).json({ error: '필수 필드 누락' })
-  }
+  // 매핑 실패 시 body 전체를 문자열로 변환해서 AI에 넘김
+  const rawDump = JSON.stringify(body, null, 2)
 
   // 1. AI로 견적 항목 분석
   const itemsDesc = ALL_ITEMS
     .map(it => `[${it.cat}/${it.sub}] ${it.name} — 기본단가 ${it.price.toLocaleString()}원`)
     .join('\n')
 
-  const userMsg = [
-    `문의분야: ${field || '미지정'}`,
-    `업체명: ${company || '미지정'}`,
-    `담당자: ${contact || '미지정'}`,
-    `문의내용: ${content || '없음'}`,
-    refLink ? `레퍼런스: ${refLink}` : '',
-  ].filter(Boolean).join('\n')
+  const userMsg = (field || company || contact || content)
+    ? [
+        `문의분야: ${field || '미지정'}`,
+        `업체명: ${company || '미지정'}`,
+        `담당자: ${contact || '미지정'}`,
+        `문의내용: ${content || '없음'}`,
+        refLink ? `레퍼런스: ${refLink}` : '',
+      ].filter(Boolean).join('\n')
+    : `폼 데이터 원문:\n${rawDump}`
 
   const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
