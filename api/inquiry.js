@@ -78,6 +78,8 @@ async function processInquiry(body) {
 
   // 매핑 실패 시 body 전체를 문자열로 변환해서 AI에 넘김
   const rawDump = JSON.stringify(body, null, 2)
+  console.log('[inquiry] 수신 body keys:', Object.keys(body))
+  console.log('[inquiry] 파싱 결과 - company:', company, '| content:', content?.slice(0, 50))
 
   // 1. AI로 견적 항목 분석
   const itemsDesc = ALL_ITEMS
@@ -124,14 +126,20 @@ ${itemsDesc}
   })
 
   let aiData = { project_title: `${company || '신규'} 영상 제작`, items: [], note: '' }
+  console.log('[inquiry] AI 응답 status:', aiRes.status)
   if (aiRes.ok) {
     const aiJson = await aiRes.json()
     const text = aiJson.content?.[0]?.text || ''
+    console.log('[inquiry] AI 응답 텍스트:', text.slice(0, 200))
     const match = text.match(/\{[\s\S]*\}/)
     if (match) {
       try { aiData = JSON.parse(match[0]) } catch (_) {}
     }
+  } else {
+    const errText = await aiRes.text().catch(() => '')
+    console.error('[inquiry] AI 호출 실패:', aiRes.status, errText.slice(0, 300))
   }
+  console.log('[inquiry] aiData.items 수:', aiData.items?.length, '| project_title:', aiData.project_title)
 
   // 2. 거래처 upsert (업체명으로 조회, 없으면 생성)
   let clientId = null
