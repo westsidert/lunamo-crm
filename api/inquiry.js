@@ -67,13 +67,25 @@ async function processInquiry(body) {
     return ''
   }
 
-  const field   = get('문의분야', 'inquirytype', 'category', 'type')
-  const company = get('업체명', 'companyname', 'company', 'organization')
-  const contact = get('담당자성함', '담당자', 'contactname', 'name', 'fullname')
-  const phone   = get('연락처', 'phone', 'tel', 'mobile')
+  // Fluent Forms 제네릭 키도 포함 (input_text=업체명, names=담당자, numeric_field=연락처, checkbox=문의분야)
+  const field   = get('문의분야', 'checkbox', 'inquirytype', 'category', 'type')
+  const company = get('업체명', 'inputtext', 'companyname', 'company', 'organization')
+  const contact = (() => {
+    const raw = get('담당자성함', '담당자', 'names', 'contactname', 'name', 'fullname')
+    if (!raw) return ''
+    // Fluent Forms names 필드는 {"first_name":"홍","last_name":"길동"} 형태일 수 있음
+    try {
+      const parsed = JSON.parse(raw)
+      if (typeof parsed === 'object' && parsed !== null) {
+        return [parsed.first_name, parsed.last_name].filter(Boolean).join(' ') || raw
+      }
+    } catch (_) {}
+    return raw
+  })()
+  const phone   = get('연락처', 'numericfield', 'phone', 'tel', 'mobile')
   const email   = get('이메일', 'email', 'mail')
-  const content = get('문의내용', 'message', 'inquiry', 'content', 'description', 'text')
-  const refLink = get('레퍼런스영상링크', 'reference', 'referencelink', 'url', 'link')
+  const content = get('문의내용', 'description', 'message', 'inquiry', 'content', 'text')
+  const refLink = get('레퍼런스영상링크', 'url', 'reference', 'referencelink', 'link')
   const fileUrl = get('첨부파일', 'attachment', 'file', 'fileurl')
 
   // 매핑 실패 시 body 전체를 문자열로 변환해서 AI에 넘김
@@ -129,11 +141,19 @@ ${itemsDesc}
   console.log('[inquiry] AI 응답 status:', aiRes.status)
   if (aiRes.ok) {
     const aiJson = await aiRes.json()
-    const text = aiJson.content?.[0]?.text || ''
-    console.log('[inquiry] AI 응답 텍스트:', text.slice(0, 200))
+    const raw = aiJson.content?.[0]?.text || ''
+    // 마크다운 코드블록 제거 후 JSON 추출
+    const text = raw.replace(/^```[\w]*\n?/m, '').replace(/```\s*$/m, '').trim()
+    console.log('[inquiry] AI 응답 텍스트(정리후):', text.slice(0, 200))
     const match = text.match(/\{[\s\S]*\}/)
     if (match) {
-      try { aiData = JSON.parse(match[0]) } catch (_) {}
+      try {
+        aiData = JSON.parse(match[0])
+      } catch (parseErr) {
+        console.error('[inquiry] JSON 파싱 실패:', parseErr.message, '| 원문:', text.slice(0, 200))
+      }
+    } else {
+      console.error('[inquiry] JSON 블록 없음, 원문:', text.slice(0, 300))
     }
   } else {
     const errText = await aiRes.text().catch(() => '')
