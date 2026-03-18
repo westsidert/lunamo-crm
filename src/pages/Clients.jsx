@@ -72,44 +72,43 @@ export default function Clients() {
         style={{ width: '100%', maxWidth: 400, padding: '9px 14px', borderRadius: 10, border: '1px solid #e2e8f0', fontSize: 14, marginBottom: 16, background: '#fff' }}
       />
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 16 }}>
-        {loading ? (
-          <div style={{ color: '#94a3b8', gridColumn: '1/-1', textAlign: 'center', padding: 40 }}>불러오는 중...</div>
-        ) : filtered.length === 0 ? (
-          <div style={{ color: '#94a3b8', gridColumn: '1/-1', textAlign: 'center', padding: 40, fontSize: 13 }}>거래처가 없습니다</div>
-        ) : filtered.map(c => (
-          <div key={c.id} style={{ background: '#fff', borderRadius: 14, padding: '20px', border: '1px solid #e2e8f0' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 14 }}>
-              <div style={{ fontSize: 16, fontWeight: 700, color: '#0f172a' }}>{c.name}</div>
-              <div style={{ display: 'flex', gap: 6 }}>
-                <button onClick={() => setHistoryClient(c)} style={{ ...btnSmall, color: '#2563eb', borderColor: '#bfdbfe' }}>거래내역</button>
-                <button onClick={() => setModal(c)} style={btnSmall}>수정</button>
-                <button onClick={() => handleDelete(c.id)} style={{ ...btnSmall, color: '#ef4444' }}>삭제</button>
-              </div>
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 14 }}>
-              {c.contact_person && <Info label="담당자" value={c.contact_person} />}
-              {c.phone && <Info label="연락처" value={c.phone} />}
-              {c.email && <Info label="이메일" value={c.email} />}
-              {c.address && <Info label="주소" value={c.address} />}
-            </div>
-            <div style={{ borderTop: '1px solid #f1f5f9', paddingTop: 12, display: 'flex', justifyContent: 'space-between' }}>
-              <div>
-                <div style={{ fontSize: 11, color: '#94a3b8' }}>총 매출</div>
-                <div style={{ fontSize: 16, fontWeight: 700, color: '#2563eb' }}>{formatKRW(getSalesForClient(c.id))}원</div>
-              </div>
-              <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: 11, color: '#94a3b8' }}>거래 건수</div>
-                <div style={{ fontSize: 16, fontWeight: 700, color: '#475569' }}>{getTxCountForClient(c.id)}건</div>
-              </div>
-            </div>
-            {c.notes && (
-              <div style={{ marginTop: 10, fontSize: 12, color: '#94a3b8', background: '#f8fafc', borderRadius: 8, padding: '8px 10px' }}>
-                {c.notes}
-              </div>
-            )}
-          </div>
-        ))}
+      <div style={{ background: '#fff', borderRadius: 14, border: '1px solid #e2e8f0', overflow: 'hidden' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+          <thead style={{ background: '#f8fafc' }}>
+            <tr>
+              {['거래처명', '담당자', '연락처', '이메일', '주소', '총 매출', '거래 건수', ''].map(h => (
+                <th key={h} style={{ padding: '11px 16px', textAlign: 'left', fontSize: 11, color: '#94a3b8', fontWeight: 600, borderBottom: '1px solid #e2e8f0', whiteSpace: 'nowrap' }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr><td colSpan={8} style={{ textAlign: 'center', padding: 40, color: '#94a3b8' }}>불러오는 중...</td></tr>
+            ) : filtered.length === 0 ? (
+              <tr><td colSpan={8} style={{ textAlign: 'center', padding: 40, color: '#94a3b8', fontSize: 13 }}>거래처가 없습니다</td></tr>
+            ) : filtered.map((c, i) => (
+              <tr key={c.id} style={{ borderBottom: '1px solid #f1f5f9', background: i % 2 ? '#fafafa' : '#fff' }}>
+                <td style={{ padding: '12px 16px', fontWeight: 700, color: '#0f172a' }}>
+                  {c.name}
+                  {c.notes && <div style={{ fontSize: 11, color: '#94a3b8', fontWeight: 400, marginTop: 2 }}>{c.notes}</div>}
+                </td>
+                <td style={{ padding: '12px 16px', color: '#374151' }}>{c.contact_person || '—'}</td>
+                <td style={{ padding: '12px 16px', color: '#374151', whiteSpace: 'nowrap' }}>{c.phone || '—'}</td>
+                <td style={{ padding: '12px 16px', color: '#374151' }}>{c.email || '—'}</td>
+                <td style={{ padding: '12px 16px', color: '#374151', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.address || '—'}</td>
+                <td style={{ padding: '12px 16px', fontWeight: 700, color: '#2563eb', whiteSpace: 'nowrap', textAlign: 'right' }}>{formatKRW(getSalesForClient(c.id))}원</td>
+                <td style={{ padding: '12px 16px', color: '#475569', textAlign: 'center' }}>{getTxCountForClient(c.id)}건</td>
+                <td style={{ padding: '12px 16px', whiteSpace: 'nowrap' }}>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button onClick={() => setHistoryClient(c)} style={{ ...btnSmall, color: '#2563eb', borderColor: '#bfdbfe' }}>거래내역</button>
+                    <button onClick={() => setModal(c)} style={btnSmall}>수정</button>
+                    <button onClick={() => handleDelete(c.id)} style={{ ...btnSmall, color: '#ef4444' }}>삭제</button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
 
       {modal && (
