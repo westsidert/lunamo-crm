@@ -315,6 +315,61 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {/* ── 다음 결제 예정 ───────────────────────────── */}
+      {upcomingPayments.length > 0 && (
+        <div style={{ ...cardStyle, marginBottom: 20, padding: 0, overflow: 'hidden' }}>
+          <div style={{
+            padding: '14px 20px', borderBottom: '1px solid #f1f5f9',
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            background: 'linear-gradient(135deg, #fff7ed, #fff)',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 14, fontWeight: 700, color: '#d97706' }}>🔔 다음 결제 예정</span>
+              <span style={{ background: '#d97706', color: '#fff', borderRadius: 20, fontSize: 11, fontWeight: 700, padding: '2px 8px' }}>
+                {upcomingPayments.length}건
+              </span>
+            </div>
+            <span style={{ fontSize: 12, color: '#94a3b8' }}>30일 이내 결제 예정 항목</span>
+          </div>
+          <div>
+            {upcomingPayments.map((fe, i) => {
+              const urgent = fe.daysLeft <= 3
+              const soon   = fe.daysLeft <= 7
+              return (
+                <div key={fe.id} style={{
+                  display: 'grid', gridTemplateColumns: '1fr auto auto auto',
+                  gap: 16, alignItems: 'center',
+                  padding: '11px 20px',
+                  background: urgent ? '#fef2f2' : i % 2 ? '#fafafa' : '#fff',
+                  borderBottom: '1px solid #f8fafc',
+                  fontSize: 13,
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{
+                      background: fe.category === '임대료' ? '#eff6ff' : fe.category === '소프트웨어' ? '#f5f3ff' : '#f1f5f9',
+                      color: fe.category === '임대료' ? '#2563eb' : fe.category === '소프트웨어' ? '#7c3aed' : '#64748b',
+                      borderRadius: 6, padding: '2px 7px', fontSize: 11, fontWeight: 600,
+                    }}>{fe.category}</span>
+                    <span style={{ fontWeight: 600, color: urgent ? '#dc2626' : '#0f172a' }}>{fe.name}</span>
+                  </div>
+                  <span style={{ fontSize: 12, color: '#94a3b8', whiteSpace: 'nowrap' }}>{billingDateLabel(fe)}</span>
+                  <span style={{ fontWeight: 700, color: '#dc2626', whiteSpace: 'nowrap' }}>
+                    {formatKRW(fe.amount)}원
+                  </span>
+                  <span style={{
+                    fontSize: 12, fontWeight: 700, padding: '3px 10px', borderRadius: 20, whiteSpace: 'nowrap',
+                    background: urgent ? '#dc2626' : soon ? '#fff7ed' : '#f1f5f9',
+                    color: urgent ? '#fff' : soon ? '#d97706' : '#64748b',
+                  }}>
+                    {fe.daysLeft === 0 ? '오늘!' : `D-${fe.daysLeft}`}
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
       {/* ── 차트 Row ─────────────────────────────────── */}
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(300px, 380px)', gap: 20, marginBottom: 20 }}>
         {/* 월별 추이 */}
