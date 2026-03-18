@@ -1057,6 +1057,7 @@ function PrintButton({ meta, values, customItems = [], discount, clients }) {
 // ── 목록에서 미리보기 (저장된 견적서) ─────────────────────────────────────
 function QuotePreviewModal({ quote, clients, onClose }) {
   const [showCompModal, setShowCompModal] = useState(false)
+  const [showEmailModal, setShowEmailModal] = useState(false)
   const { values, customItems } = parseDbItems(quote.items || [])
   const meta = {
     quote_date: quote.quote_date,
@@ -1067,6 +1068,8 @@ function QuotePreviewModal({ quote, clients, onClose }) {
   }
   const discount = { is_first_deal: quote.is_first_deal, discount_rate: quote.discount_rate }
   const clientName = quote.clients?.name || quote.client_name_override || ''
+  const clientEmail = quote.clients?.email || ''
+  const { subTotal, finalAmount } = calcTotals(values, customItems, discount.discount_rate, discount.is_first_deal)
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.85)', display: 'flex', flexDirection: 'column', zIndex: 1000 }}>
@@ -1074,10 +1077,22 @@ function QuotePreviewModal({ quote, clients, onClose }) {
         <span style={{ color: '#e2e8f0', fontSize: 14, fontWeight: 500 }}>견적서 미리보기 — {quote.project_title}</span>
         <div style={{ display: 'flex', gap: 8 }}>
           <button onClick={() => setShowCompModal(true)} style={{ ...btnPrimary, background: '#7c3aed' }}>📊 비교견적서</button>
+          <button onClick={() => setShowEmailModal(true)} style={{ ...btnPrimary, background: '#059669' }}>✉️ 이메일 발송</button>
           <PrintButton meta={meta} values={values} customItems={customItems} discount={discount} clients={clients} />
           <button onClick={onClose} style={{ padding: '7px 18px', borderRadius: 8, border: '1px solid #475569', background: 'none', color: '#cbd5e1', cursor: 'pointer', fontSize: 13 }}>닫기</button>
         </div>
       </div>
+      {showEmailModal && (
+        <SendQuoteEmailModal
+          quote={quote}
+          clientName={clientName}
+          clientEmail={clientEmail}
+          subTotal={subTotal}
+          finalAmount={finalAmount}
+          items={getSelectedItems(values, customItems)}
+          onClose={() => setShowEmailModal(false)}
+        />
+      )}
       <div style={{ flex: 1, overflow: 'auto', padding: '32px', display: 'flex', justifyContent: 'center' }}>
         <PreviewDoc meta={meta} values={values} customItems={customItems} discount={discount} clients={clients} />
       </div>
@@ -1739,6 +1754,87 @@ function CompanySettingsModal({ onClose, onSave }) {
           <button onClick={onClose} style={btnCancel}>취소</button>
           <button onClick={() => onSave(comps)} style={btnPrimary}>저장</button>
         </div>
+      </div>
+    </div>
+  )
+}
+
+// ── 견적서 이메일 발송 모달 ────────────────────────────────────────────────
+function SendQuoteEmailModal({ quote, clientName, clientEmail, subTotal, finalAmount, items, onClose }) {
+  const DEFAULT_MSG = `안녕하세요, 루나모입니다.\n\n요청하신 프로젝트 견적서를 보내드립니다.\n검토 후 궁금하신 점이 있으시면 언제든지 연락 주세요.\n\n감사합니다.`
+  const [to, setTo] = useState(clientEmail)
+  const [subject, setSubject] = useState(`[LUNAMO] 견적서 - ${quote.project_title}`)
+  const [message, setMessage] = useState(DEFAULT_MSG)
+  const [sending, setSending] = useState(false)
+  const [done, setDone] = useState(false)
+  const [error, setError] = useState('')
+
+  const handleSend = async () => {
+    if (!to) return setError('받는 사람 이메일을 입력해주세요.')
+    setSending(true); setError('')
+    try {
+      const res = await fetch('/api/send-quote', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          to, subject, message,
+          quote: {
+            project_title: quote.project_title,
+            client_name: clientName,
+            quote_date: quote.quote_date,
+            sub_total: subTotal,
+            final_amount: finalAmount,
+            items,
+          },
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || '전송 실패')
+      setDone(true)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setSending(false)
+    }
+  }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2000 }}>
+      <div style={{ background: '#fff', borderRadius: 16, width: 480, padding: 28, boxShadow: '0 24px 80px rgba(0,0,0,0.3)' }}>
+        {done ? (
+          <div style={{ textAlign: 'center', padding: '20px 0' }}>
+            <div style={{ fontSize: 40, marginBottom: 12 }}>✅</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: '#059669', marginBottom: 8 }}>이메일이 발송되었습니다</div>
+            <div style={{ fontSize: 13, color: '#64748b', marginBottom: 20 }}>{to}</div>
+            <button onClick={onClose} style={{ ...btnPrimary, background: '#059669' }}>닫기</button>
+          </div>
+        ) : (
+          <>
+            <h3 style={{ fontSize: 16, fontWeight: 700, color: '#0f172a', marginBottom: 20 }}>✉️ 견적서 이메일 발송</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <div>
+                <label style={labelStyle}>받는 사람 이메일 *</label>
+                <input value={to} onChange={e => setTo(e.target.value)} style={inputStyle} placeholder="client@example.com" />
+              </div>
+              <div>
+                <label style={labelStyle}>제목</label>
+                <input value={subject} onChange={e => setSubject(e.target.value)} style={inputStyle} />
+              </div>
+              <div>
+                <label style={labelStyle}>메시지</label>
+                <textarea value={message} onChange={e => setMessage(e.target.value)}
+                  style={{ ...inputStyle, height: 130, resize: 'vertical', lineHeight: 1.6 }} />
+              </div>
+              {error && <div style={{ fontSize: 12, color: '#dc2626', background: '#fef2f2', padding: '8px 12px', borderRadius: 8 }}>{error}</div>}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
+              <button onClick={onClose} style={btnCancel}>취소</button>
+              <button onClick={handleSend} disabled={sending} style={{ ...btnPrimary, background: '#059669', opacity: sending ? 0.7 : 1 }}>
+                {sending ? '발송 중...' : '발송'}
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   )
