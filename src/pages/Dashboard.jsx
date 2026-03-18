@@ -222,22 +222,34 @@ export default function Dashboard() {
           </div>
           {/* 목록 */}
           <div style={{ padding: '4px 0' }}>
-            {unpaidTx.map((tx, i) => (
-              <div key={tx.id} style={{
-                display: 'grid', gridTemplateColumns: '110px 1fr 1fr auto',
-                gap: 12, alignItems: 'center',
-                padding: '10px 20px',
-                background: i % 2 === 0 ? '#fff' : '#fafafa',
-                fontSize: 13,
-              }}>
-                <span style={{ color: '#94a3b8', fontSize: 12 }}>{tx.transaction_date}</span>
-                <span style={{ color: '#374151', fontWeight: 500 }}>{tx.clients?.name || '미지정'}</span>
-                <span style={{ color: '#64748b' }}>{tx.memo || '—'}</span>
-                <span style={{ color: '#dc2626', fontWeight: 700, textAlign: 'right' }}>
-                  {formatKRW(exVat ? Number(tx.supply_amount) : Number(tx.total_amount))}원
-                </span>
-              </div>
-            ))}
+            {unpaidTx.map((tx, i) => {
+              const days = Math.floor((new Date() - new Date(tx.transaction_date)) / 86400000)
+              const urgent = days >= 30
+              return (
+                <div key={tx.id} style={{
+                  display: 'grid', gridTemplateColumns: '110px 1fr 1fr auto auto',
+                  gap: 12, alignItems: 'center',
+                  padding: '10px 20px',
+                  background: i % 2 === 0 ? '#fff' : '#fafafa',
+                  fontSize: 13,
+                }}>
+                  <span style={{ color: '#94a3b8', fontSize: 12 }}>{tx.transaction_date}</span>
+                  <span style={{ color: '#374151', fontWeight: 500 }}>{tx.clients?.name || '미지정'}</span>
+                  <span style={{ color: '#64748b' }}>{tx.memo || '—'}</span>
+                  <span style={{
+                    fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 20,
+                    background: urgent ? '#fef2f2' : '#fff7ed',
+                    color: urgent ? '#dc2626' : '#d97706',
+                    whiteSpace: 'nowrap',
+                  }}>
+                    D+{days}
+                  </span>
+                  <span style={{ color: '#dc2626', fontWeight: 700, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    {formatKRW(exVat ? Number(tx.supply_amount) : Number(tx.total_amount))}원
+                  </span>
+                </div>
+              )
+            })}
           </div>
         </div>
       )}

@@ -30,7 +30,10 @@ export default function Projects() {
     const txs = transactions.filter(t => t.project_id === projectId)
     const sales = txs.filter(t => t.type === '매출').reduce((s, t) => s + Number(t.total_amount), 0)
     const purchase = txs.filter(t => t.type === '매입').reduce((s, t) => s + Number(t.total_amount), 0)
-    return { sales, purchase, profit: sales - purchase }
+    const labor = txs.filter(t => t.type === '외주인건비').reduce((s, t) => s + Number(t.supply_amount), 0)
+    const profit = sales - purchase - labor
+    const margin = sales > 0 ? Math.round(profit / sales * 100) : null
+    return { sales, purchase, labor, profit, margin }
   }
 
   const filtered = projects.filter(p => !filterStatus || p.status === filterStatus)
@@ -116,10 +119,15 @@ export default function Projects() {
                 <div style={{ fontSize: 12, color: '#64748b', marginBottom: 14, lineHeight: 1.5 }}>{p.description}</div>
               )}
 
-              <div style={{ borderTop: '1px solid #f1f5f9', paddingTop: 12, display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+              <div style={{ borderTop: '1px solid #f1f5f9', paddingTop: 12, display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
                 <Stat label="매출" value={formatKRW(stats.sales)} color="#2563eb" />
                 <Stat label="매입" value={formatKRW(stats.purchase)} color="#d97706" />
-                <Stat label="순이익" value={formatKRW(stats.profit)} color={stats.profit >= 0 ? '#059669' : '#dc2626'} />
+                <Stat label="외주인건비" value={formatKRW(stats.labor)} color="#7c3aed" />
+                <Stat
+                  label={stats.margin !== null ? `순이익 (${stats.margin}%)` : '순이익'}
+                  value={formatKRW(stats.profit)}
+                  color={stats.profit >= 0 ? '#059669' : '#dc2626'}
+                />
               </div>
 
               {p.total_budget > 0 && (
