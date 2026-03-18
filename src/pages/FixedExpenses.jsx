@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { getFixedExpenses, createFixedExpense, updateFixedExpense, deleteFixedExpense } from '../lib/api'
+import { getFixedExpenses, createFixedExpense, updateFixedExpense, deleteFixedExpense, getTransactions, createTransaction } from '../lib/api'
 import { formatKRW, thisMonth, thisYear, MONTHS } from '../lib/utils'
 
 const CATEGORIES  = ['임대료', '소프트웨어', '통신비', '인건비', '마케팅', '기타']
@@ -34,13 +34,59 @@ export default function FixedExpenses() {
   const [viewMonth, setViewMonth] = useState(thisMonth())
   const [filterActive, setFilterActive] = useState('all') // 'all' | 'active' | 'inactive'
 
+  const [rentModal, setRentModal] = useState(false)
+  const [rentForm, setRentForm] = useState({})
+  const [rentHistory, setRentHistory] = useState([])
+
   useEffect(() => { load() }, [])
 
   const load = async () => {
     setLoading(true)
-    try { setItems(await getFixedExpenses()) }
+    try {
+      const [fe, tx] = await Promise.all([
+        getFixedExpenses(),
+        getTransactions(),
+      ])
+      setItems(fe)
+      setRentHistory(tx.filter(t => t.memo && t.memo.startsWith('[임대료]')).sort((a, b) => b.transaction_date.localeCompare(a.transaction_date)))
+    }
     catch (e) { console.error(e) }
     finally { setLoading(false) }
+  }
+
+  const openRentModal = () => {
+    const now = new Date()
+    setRentForm({
+      date: now.toISOString().slice(0, 10),
+      amount: '',
+      payment_method: '계좌이체',
+      note: '',
+    })
+    setRentModal(true)
+  }
+
+  const saveRent = async () => {
+    if (!rentForm.amount || isNaN(Number(rentForm.amount))) return alert('금액을 입력하세요.')
+    const total = parseInt(rentForm.amount)
+    const supply = Math.round(total / 1.1)
+    const vat = total - supply
+    const d = new Date(rentForm.date)
+    const label = `${d.getFullYear()}년 ${d.getMonth() + 1}월`
+    try {
+      const created = await createTransaction({
+        type: '매입',
+        item: '임대료',
+        memo: `[임대료] ${label}${rentForm.note ? ' · ' + rentForm.note : ''}`,
+        transaction_date: rentForm.date,
+        supply_amount: supply,
+        vat,
+        payment_status: '지급완료',
+        client_id: null,
+        project_id: null,
+      })
+      setRentHistory(prev => [created, ...prev])
+      setRentModal(false)
+    } catch (e) { alert('저장 실패: ' + e.message) }
   }
 
   const openAdd = () => {
@@ -142,10 +188,16 @@ export default function FixedExpenses() {
           <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0f172a' }}>고정비 관리</h1>
           <p style={{ color: '#64748b', marginTop: 4, fontSize: 13 }}>구독료, 임대료 등 매달 나가는 고정 비용</p>
         </div>
-        <button onClick={openAdd} style={{
-          background: '#0f172a', color: '#fff', border: 'none', borderRadius: 10,
-          padding: '10px 20px', fontSize: 14, fontWeight: 600, cursor: 'pointer',
-        }}>+ 항목 추가</button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={openRentModal} style={{
+            background: '#2563eb', color: '#fff', border: 'none', borderRadius: 10,
+            padding: '10px 20px', fontSize: 14, fontWeight: 600, cursor: 'pointer',
+          }}>🏠 이번 달 월세 입력</button>
+          <button onClick={openAdd} style={{
+            background: '#0f172a', color: '#fff', border: 'none', borderRadius: 10,
+            padding: '10px 20px', fontSize: 14, fontWeight: 600, cursor: 'pointer',
+          }}>+ 항목 추가</button>
+        </div>
       </div>
 
       {/* 통계 카드 3개 */}
@@ -287,6 +339,83 @@ export default function FixedExpenses() {
           </table>
         )}
       </div>
+
+      {/* 임대료 월별 내역 */}
+      {rentHistory.length > 0 && (
+        <div style={{ ...cardStyle, marginTop: 20, padding: 0, overflow: 'hidden' }}>
+          <div style={{ padding: '16px 20px', borderBottom: '1px solid #f1f5f9', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: 14, fontWeight: 600, color: '#374151' }}>🏠 임대료 월별 내역</span>
+            <span style={{ fontSize: 12, color: '#94a3b8' }}>총 {rentHistory.length}건 · 합계 {formatKRW(rentHistory.reduce((s, t) => s + Number(t.supply_amount) + Number(t.vat), 0))}원</span>
+          </div>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <thead>
+              <tr style={{ background: '#f8fafc', borderBottom: '1px solid #f1f5f9' }}>
+                {['날짜', '내용', '금액', '결제상태'].map(h => (
+                  <th key={h} style={{ padding: '10px 16px', textAlign: 'left', fontSize: 11, color: '#94a3b8', fontWeight: 600 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rentHistory.map((tx, i) => (
+                <tr key={tx.id} style={{ borderBottom: '1px solid #f8fafc', background: i % 2 ? '#fafafa' : '#fff' }}>
+                  <td style={{ padding: '10px 16px', color: '#64748b', whiteSpace: 'nowrap' }}>{tx.transaction_date}</td>
+                  <td style={{ padding: '10px 16px', color: '#374151' }}>{tx.memo?.replace('[임대료] ', '') || '—'}</td>
+                  <td style={{ padding: '10px 16px', fontWeight: 700, color: '#dc2626', whiteSpace: 'nowrap' }}>{formatKRW(Number(tx.supply_amount) + Number(tx.vat))}원</td>
+                  <td style={{ padding: '10px 16px' }}>
+                    <span style={{ background: '#f0fdf4', color: '#059669', borderRadius: 6, padding: '2px 8px', fontSize: 11, fontWeight: 600 }}>
+                      {tx.payment_status}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* 월세 입력 모달 */}
+      {rentModal && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.5)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+        }} onClick={e => { if (e.target === e.currentTarget) setRentModal(false) }}>
+          <div style={{ background: '#fff', borderRadius: 16, width: 400, padding: 28, boxShadow: '0 24px 80px rgba(0,0,0,0.2)' }}>
+            <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 6, color: '#0f172a' }}>🏠 월세 입력</h2>
+            <p style={{ fontSize: 12, color: '#94a3b8', marginBottom: 20 }}>임대료(월세)는 매달 변동이 있어 별도 기록됩니다.</p>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <div>
+                <label style={lbl}>결제일 *</label>
+                <input type="date" value={rentForm.date || ''} onChange={e => setRentForm(p => ({ ...p, date: e.target.value }))} style={inp} />
+              </div>
+              <div>
+                <label style={lbl}>금액 (원) * &nbsp;<span style={{ fontWeight: 400, color: '#94a3b8' }}>부가세 포함 총액</span></label>
+                <input
+                  type="number" autoFocus
+                  value={rentForm.amount || ''}
+                  onChange={e => setRentForm(p => ({ ...p, amount: e.target.value }))}
+                  style={{ ...inp, fontSize: 18, fontWeight: 700 }}
+                  placeholder="예: 1650000"
+                />
+                {rentForm.amount && !isNaN(Number(rentForm.amount)) && Number(rentForm.amount) > 0 && (
+                  <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>
+                    공급가 {formatKRW(Math.round(Number(rentForm.amount) / 1.1))}원 + 부가세 {formatKRW(Number(rentForm.amount) - Math.round(Number(rentForm.amount) / 1.1))}원
+                  </div>
+                )}
+              </div>
+              <div>
+                <label style={lbl}>비고 (선택)</label>
+                <input value={rentForm.note || ''} onChange={e => setRentForm(p => ({ ...p, note: e.target.value }))} style={inp} placeholder="예: 관리비 포함, 인상분 반영 등" />
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 22 }}>
+              <button onClick={() => setRentModal(false)} style={{ padding: '9px 20px', borderRadius: 8, border: '1px solid #e2e8f0', background: '#fff', cursor: 'pointer', fontSize: 13 }}>취소</button>
+              <button onClick={saveRent} style={{ padding: '9px 20px', borderRadius: 8, border: 'none', background: '#2563eb', color: '#fff', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>저장</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 모달 */}
       {modal && (
