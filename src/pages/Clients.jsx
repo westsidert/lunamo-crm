@@ -12,6 +12,12 @@ export default function Clients() {
   const [historyClient, setHistoryClient] = useState(null)
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
+  const [salesYear, setSalesYear] = useState('전체')
+
+  const yearOptions = (() => {
+    const years = [...new Set(transactions.map(t => t.transaction_date?.slice(0, 4)).filter(Boolean))].sort((a, b) => b - a)
+    return ['전체', ...years]
+  })()
 
   useEffect(() => { loadAll() }, [])
 
@@ -27,12 +33,14 @@ export default function Clients() {
 
   const getSalesForClient = (clientId) => {
     return transactions
-      .filter(t => t.client_id === clientId && t.type === '매출')
+      .filter(t => t.client_id === clientId && t.type === '매출' && (salesYear === '전체' || t.transaction_date?.startsWith(salesYear)))
       .reduce((s, t) => s + Number(t.total_amount), 0)
   }
 
   const getTxCountForClient = (clientId) => {
-    return transactions.filter(t => t.client_id === clientId).length
+    return transactions
+      .filter(t => t.client_id === clientId && (salesYear === '전체' || t.transaction_date?.startsWith(salesYear)))
+      .length
   }
 
   const filtered = clients.filter(c =>
@@ -66,17 +74,29 @@ export default function Clients() {
         <button onClick={() => setModal('create')} style={btnPrimary}>+ 거래처 추가</button>
       </div>
 
-      <input
-        placeholder="거래처명, 담당자, 연락처 검색..."
-        value={search} onChange={e => setSearch(e.target.value)}
-        style={{ width: '100%', maxWidth: 400, padding: '9px 14px', borderRadius: 10, border: '1px solid #e2e8f0', fontSize: 14, marginBottom: 16, background: '#fff' }}
-      />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
+        <input
+          placeholder="거래처명, 담당자, 연락처 검색..."
+          value={search} onChange={e => setSearch(e.target.value)}
+          style={{ flex: '1 1 280px', maxWidth: 400, padding: '9px 14px', borderRadius: 10, border: '1px solid #e2e8f0', fontSize: 14, background: '#fff' }}
+        />
+        <div style={{ display: 'flex', gap: 6 }}>
+          {['전체', ...(() => [...new Set(transactions.map(t => t.transaction_date?.slice(0,4)).filter(Boolean))].sort((a,b)=>b-a))()].map(y => (
+            <button key={y} onClick={() => setSalesYear(y)} style={{
+              padding: '7px 14px', borderRadius: 8, fontSize: 13, fontWeight: salesYear === y ? 700 : 400, cursor: 'pointer',
+              background: salesYear === y ? '#2563eb' : '#fff',
+              color: salesYear === y ? '#fff' : '#64748b',
+              border: `1px solid ${salesYear === y ? '#2563eb' : '#e2e8f0'}`
+            }}>{y === '전체' ? '전체' : `${y}년`}</button>
+          ))}
+        </div>
+      </div>
 
       <div style={{ background: '#fff', borderRadius: 14, border: '1px solid #e2e8f0', overflow: 'hidden' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
           <thead style={{ background: '#f8fafc' }}>
             <tr>
-              {['거래처명', '담당자', '연락처', '이메일', '주소', '총 매출', '거래 건수', ''].map(h => (
+              {['거래처명', '담당자', '연락처', '이메일', '주소', salesYear === '전체' ? '누적 매출' : `${salesYear}년 매출`, salesYear === '전체' ? '거래 건수' : `${salesYear}년 건수`, ''].map(h => (
                 <th key={h} style={{ padding: '11px 16px', textAlign: 'left', fontSize: 11, color: '#94a3b8', fontWeight: 600, borderBottom: '1px solid #e2e8f0', whiteSpace: 'nowrap' }}>{h}</th>
               ))}
             </tr>
