@@ -43,7 +43,7 @@ export default async function handler(req, res) {
 
   // 즉시 200 응답 — waitUntil로 백그라운드 처리 보장
   res.status(200).json({ received: true })
-  waitUntil(processInquiry(body))
+  waitUntil(processInquiry(body).catch(e => console.error('[inquiry] 처리 실패:', e)))
 }
 
 async function processInquiry(body) {
@@ -159,19 +159,24 @@ ${itemsDesc}
     timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit'
   }).replace(/\. /g, '-').replace('.', '')
 
+  // quotes 테이블에 존재하는 컬럼만 사용
   const quotePayload = {
     project_title: aiData.project_title || `${company || '신규'} 영상 제작`,
-    client_id: clientId,
-    client_name_override: clientId ? null : company,
     quote_date: today,
-    status: 'draft',
-    memo: [
-      aiData.note ? `[AI 분석] ${aiData.note}` : '',
-      refLink ? `레퍼런스: ${refLink}` : '',
-      fileUrl ? `첨부파일: ${fileUrl}` : '',
-      content ? `원문 의뢰: ${content}` : '',
-    ].filter(Boolean).join('\n'),
   }
+  if (clientId) quotePayload.client_id = clientId
+  if (!clientId && company) quotePayload.client_name_override = company
+
+  // memo/status 컬럼이 있으면 추가 (없어도 에러 안 나도록 별도 처리)
+  const memoText = [
+    aiData.note ? `[AI 분석] ${aiData.note}` : '',
+    refLink ? `레퍼런스: ${refLink}` : '',
+    fileUrl ? `첨부파일: ${fileUrl}` : '',
+    content ? `원문 의뢰: ${content}` : '',
+  ].filter(Boolean).join('\n')
+  if (memoText) quotePayload.memo = memoText
+
+  console.log('[inquiry] quote insert payload:', JSON.stringify(quotePayload))
 
   const { data: quote, error: qErr } = await supabase
     .from('quotes')
@@ -179,7 +184,11 @@ ${itemsDesc}
     .select()
     .single()
 
-  if (qErr) return res.status(500).json({ error: qErr.message })
+  if (qErr) {
+    console.error('[inquiry] quote insert 실패:', qErr)
+    throw new Error(qErr.message)
+  }
+  console.log('[inquiry] quote 저장 완료:', quote.id)
 
   // quote_items 저장
   if (aiData.items?.length > 0) {
@@ -187,13 +196,15 @@ ${itemsDesc}
       quote_id: quote.id,
       sort_order: i,
       category: it.cat,
-      sub_category: it.sub,
+      sub_category: it.sub || '',
       contents: it.name,
       day: it.day || 1,
       qty: it.qty || 1,
       each_price: it.price || 0,
     }))
-    await supabase.from('quote_items').insert(quoteItems)
+    const { error: iErr } = await supabase.from('quote_items').insert(quoteItems)
+    if (iErr) console.error('[inquiry] quote_items insert 실패:', iErr)
+    else console.log('[inquiry] quote_items 저장 완료:', quoteItems.length, '건')
   }
 
   // 4. 알림 이메일 발송
