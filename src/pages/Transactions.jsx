@@ -456,7 +456,8 @@ function LaborBatchModal({ projects, onClose, onSave }) {
   const [paymentStatus, setPaymentStatus] = useState('지급완료')
   const [rows, setRows] = useState([mkRow()])
   const [loading, setLoading] = useState(false)
-  const crew = getCrew()
+  const [crew, setCrew] = useState([])
+  useEffect(() => { getCrew().then(setCrew).catch(console.error) }, [])
 
   function mkRow() {
     return { _id: Date.now() + Math.random(), name: '', item: '', amount: '', withholding: '', memo: '' }
