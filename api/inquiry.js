@@ -25,7 +25,7 @@ const ALL_ITEMS = [
   { cat: 'production',     sub: '진행비', name: '출장비',       price: 100000 },
   { cat: 'production',     sub: '진행비', name: '식대 및 기타', price: 200000 },
   { cat: 'production',     sub: '미술',   name: '장소대여',     price: 200000 },
-  { cat: 'Post-production',sub: '편집',   name: '편집',         price: 200000 },
+  { cat: 'Post-production',sub: '편집',   name: '편집',         price: 400000 },
   { cat: 'Post-production',sub: '편집',   name: 'CG',           price: 450000 },
   { cat: 'Post-production',sub: '편집',   name: '2D 그래픽',    price: 400000 },
   { cat: 'Post-production',sub: '편집',   name: '자막',         price: 250000 },
@@ -138,7 +138,7 @@ ${itemsDesc}
 - 편집 포함 여부는 문의 내용으로 판단 (언급 없으면 편집 포함)
 
 **유튜브 콘텐츠 — 편집 외주만 (촬영 없음)**
-- 편집 단가: 200,000원/편, day:1, qty:편수
+- 편집 단가: 400,000원/편, day:1, qty:편수
 - 편집 항목만 포함, 기획·촬영 항목 제외
 
 **유튜브 콘텐츠 — 풀패키지 (기획·촬영·편집 포함)**
