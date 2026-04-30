@@ -72,6 +72,7 @@ create table quotes (
   sub_total numeric default 0,
   vat_amount numeric default 0,
   final_amount numeric default 0,
+  memo text,
   created_at timestamptz default now()
 );
 
@@ -81,6 +82,7 @@ create table quote_items (
   quote_id uuid references quotes(id) on delete cascade not null,
   category text,
   contents text,
+  preset_key text,
   each_price numeric default 0,
   qty integer default 1,
   day integer default 1,

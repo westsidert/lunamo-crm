@@ -71,7 +71,7 @@ const itemKey = (item) => `${item.cat}|${item.sub}|${item.name}`
 const initValues = () => {
   const v = {}
   ALL_ITEMS.forEach(item => {
-    v[itemKey(item)] = { day: '', qty: '', price: item.price }
+    v[itemKey(item)] = { day: '', qty: '', price: item.price, nameOverride: '' }
   })
   return v
 }
@@ -101,9 +101,16 @@ const parseDbItems = (dbItems) => {
   const values = initValues()
   const customItems = []
   dbItems.forEach(item => {
-    const match = ALL_ITEMS.find(a => a.name === item.contents && a.cat === item.category)
+    let match = null
+    if (item.preset_key) {
+      match = ALL_ITEMS.find(a => itemKey(a) === item.preset_key)
+    }
+    if (!match) {
+      match = ALL_ITEMS.find(a => a.name === item.contents && a.cat === item.category)
+    }
     if (match) {
-      values[itemKey(match)] = { day: item.day, qty: item.qty, price: item.each_price }
+      const override = item.contents && item.contents !== match.name ? item.contents : ''
+      values[itemKey(match)] = { day: item.day, qty: item.qty, price: item.each_price, nameOverride: override }
     } else {
       customItems.push({ _id: Math.random(), cat: item.category || '기타', name: item.contents, day: item.day, qty: item.qty, price: item.each_price })
     }
@@ -146,7 +153,7 @@ export default function Quotes() {
 
   const openCreate = () => setEditing({
     initialStep: 0,
-    meta: { quote_date: new Date().toISOString().slice(0, 10), client_id: '', client_name_override: '', project_title: '', status: '작성중' },
+    meta: { quote_date: new Date().toISOString().slice(0, 10), client_id: '', client_name_override: '', project_title: '', status: '작성중', memo: '' },
     values: initValues(),
     customItems: [],
     discount: { is_first_deal: false, discount_rate: 15 },
@@ -158,7 +165,7 @@ export default function Quotes() {
     setEditing({
       initialStep: 1,
       id: q.id,
-      meta: { quote_date: q.quote_date, client_id: q.client_id || '', client_name_override: q.client_name_override || '', project_title: q.project_title, status: q.status },
+      meta: { quote_date: q.quote_date, client_id: q.client_id || '', client_name_override: q.client_name_override || '', project_title: q.project_title, status: q.status, memo: q.memo || '' },
       values, customItems,
       discount: { is_first_deal: q.is_first_deal, discount_rate: q.discount_rate },
     })
@@ -174,16 +181,17 @@ export default function Quotes() {
       .filter(item => calcItemSum(values[itemKey(item)] || {}) > 0)
       .map(item => {
         const v = values[itemKey(item)]
-        return { category: item.cat, contents: item.name, each_price: Number(v.price)||0, qty: Number(v.qty)||1, day: Number(v.day)||1, sum: calcItemSum(v) }
+        return { category: item.cat, contents: (v.nameOverride && v.nameOverride.trim()) ? v.nameOverride.trim() : item.name, preset_key: itemKey(item), each_price: Number(v.price)||0, qty: Number(v.qty)||1, day: Number(v.day)||1, sum: calcItemSum(v) }
       })
     const customSelected = (customItems || [])
       .filter(ci => calcItemSum(ci) > 0)
-      .map(ci => ({ category: ci.cat, contents: ci.name, each_price: Number(ci.price)||0, qty: Number(ci.qty)||1, day: Number(ci.day)||1, sum: calcItemSum(ci) }))
+      .map(ci => ({ category: ci.cat, contents: ci.name, preset_key: null, each_price: Number(ci.price)||0, qty: Number(ci.qty)||1, day: Number(ci.day)||1, sum: calcItemSum(ci) }))
     const selectedItems = [...regularSelected, ...customSelected].map((item, i) => ({ ...item, sort_order: i }))
     const { subTotal, totalWithVat, finalAmount } = calcTotals(values, customItems, discount.discount_rate, discount.is_first_deal)
     const payload = {
       ...meta,
       client_id: meta.client_id || null,
+      memo: meta.memo || null,
       sub_total: subTotal, total_with_vat: totalWithVat, final_amount: finalAmount,
       is_first_deal: discount.is_first_deal, discount_rate: discount.discount_rate,
     }
@@ -302,6 +310,23 @@ function QuoteWizard({ initial, clients, pastQuotes = [], onClose, onSave }) {
 
   const setMeta_ = (k, v) => setMeta(m => ({ ...m, [k]: v }))
   const setVal   = (key, field, v) => setValues(prev => ({ ...prev, [key]: { ...prev[key], [field]: v } }))
+
+  // 소요일/수량 일괄 ±1 (현재 값이 0보다 큰 행만 대상)
+  const bumpField = (field, delta) => {
+    setValues(prev => {
+      const next = { ...prev }
+      Object.keys(next).forEach(k => {
+        const cur = Number(next[k][field]) || 0
+        if (cur > 0) next[k] = { ...next[k], [field]: String(Math.max(0, cur + delta)) }
+      })
+      return next
+    })
+    setCustomItems(prev => prev.map(ci => {
+      const cur = Number(ci[field]) || 0
+      if (cur > 0) return { ...ci, [field]: String(Math.max(0, cur + delta)) }
+      return ci
+    }))
+  }
 
   const addCustomItem = () => setCustomItems(prev => [...prev, { _id: Math.random(), cat: 'production', name: '', day: '', qty: '', price: 0 }])
   const updateCI = (id, field, v) => setCustomItems(prev => prev.map(ci => ci._id === id ? { ...ci, [field]: v } : ci))
@@ -558,8 +583,12 @@ function QuoteWizard({ initial, clients, pastQuotes = [], onClose, onSave }) {
                       <th style={thStyle}>구분</th>
                       <th style={thStyle}>세부</th>
                       <th style={{ ...thStyle, textAlign: 'left' }}>항목</th>
-                      <th style={{ ...thStyle, width: 70 }}>소요일</th>
-                      <th style={{ ...thStyle, width: 70 }}>수량</th>
+                      <th style={{ ...thStyle, width: 70 }}>
+                        <BumpHeader label="소요일" onUp={() => bumpField('day', 1)} onDown={() => bumpField('day', -1)} />
+                      </th>
+                      <th style={{ ...thStyle, width: 70 }}>
+                        <BumpHeader label="수량" onUp={() => bumpField('qty', 1)} onDown={() => bumpField('qty', -1)} />
+                      </th>
                       <th style={{ ...thStyle, width: 120 }}>단가</th>
                       <th style={{ ...thStyle, width: 120 }}>소계</th>
                     </tr>
@@ -611,7 +640,12 @@ function QuoteWizard({ initial, clients, pastQuotes = [], onClose, onSave }) {
                                 <td style={{ borderRight: '1px solid #f1f5f9' }} />
                               ) : null}
                               <td style={{ padding: '5px 12px', fontSize: 13, color: isFilled ? '#1e40af' : '#374151', fontWeight: isFilled ? 600 : 400 }}>
-                                {item.name}
+                                <EditableName
+                                  defaultName={item.name}
+                                  override={v.nameOverride || ''}
+                                  onChange={val => setVal(key, 'nameOverride', val)}
+                                  isFilled={isFilled}
+                                />
                               </td>
                               <td style={{ padding: '4px 6px', textAlign: 'center' }}>
                                 <input
@@ -674,8 +708,12 @@ function QuoteWizard({ initial, clients, pastQuotes = [], onClose, onSave }) {
                       <tr style={{ background: '#fafafa' }}>
                         <th style={{ ...thStyle, textAlign: 'left', width: 120 }}>구분</th>
                         <th style={{ ...thStyle, textAlign: 'left' }}>항목명</th>
-                        <th style={{ ...thStyle, width: 70 }}>소요일</th>
-                        <th style={{ ...thStyle, width: 70 }}>수량</th>
+                        <th style={{ ...thStyle, width: 70 }}>
+                          <BumpHeader label="소요일" onUp={() => bumpField('day', 1)} onDown={() => bumpField('day', -1)} />
+                        </th>
+                        <th style={{ ...thStyle, width: 70 }}>
+                          <BumpHeader label="수량" onUp={() => bumpField('qty', 1)} onDown={() => bumpField('qty', -1)} />
+                        </th>
                         <th style={{ ...thStyle, width: 120 }}>단가</th>
                         <th style={{ ...thStyle, width: 120 }}>소계</th>
                         <th style={{ ...thStyle, width: 36 }}></th>
@@ -725,6 +763,18 @@ function QuoteWizard({ initial, clients, pastQuotes = [], onClose, onSave }) {
                   </table>
                 </div>
               )}
+            </div>
+
+            {/* 추가 메모 */}
+            <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e2e8f0', padding: '16px 20px', marginBottom: 20 }}>
+              <label style={{ ...labelStyle, marginBottom: 8 }}>추가 메모 (견적서 하단에 표시)</label>
+              <textarea
+                value={meta.memo || ''}
+                onChange={e => setMeta_('memo', e.target.value)}
+                placeholder={`예) ※ 최종 결과물\n- 바이럴 영상 (가로)\n- 쇼츠(릴스)용 세로 영상`}
+                rows={3}
+                style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.6 }}
+              />
             </div>
 
             {/* 할인 + 합계 */}
@@ -835,7 +885,8 @@ function PreviewDoc({ meta, values, customItems = [], discount, clients }) {
       .filter(item => calcItemSum(values[itemKey(item)] || {}) > 0)
       .map(item => {
         const v = values[itemKey(item)]
-        return { ...item, day: Number(v.day)||1, qty: Number(v.qty)||1, price: Number(v.price)||0 }
+        const displayName = (v.nameOverride && v.nameOverride.trim()) ? v.nameOverride.trim() : item.name
+        return { ...item, name: displayName, day: Number(v.day)||1, qty: Number(v.qty)||1, price: Number(v.price)||0 }
       }),
     ...customItems
       .filter(ci => ci.name && calcItemSum(ci) > 0)
@@ -860,7 +911,9 @@ function PreviewDoc({ meta, values, customItems = [], discount, clients }) {
       width: 794, margin: '0 auto', background: '#fff',
       padding: '56px 60px 80px',
       fontFamily: "'Apple SD Gothic Neo','Noto Sans KR','Malgun Gothic',sans-serif",
-      boxShadow: '0 8px 40px rgba(0,0,0,0.15)', minHeight: 1000,
+      boxShadow: '0 8px 40px rgba(0,0,0,0.15)',
+      minHeight: 1123,
+      display: 'flex', flexDirection: 'column',
     }}>
       {/* 헤더 */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', paddingBottom: 6 }}>
@@ -941,8 +994,14 @@ function PreviewDoc({ meta, values, customItems = [], discount, clients }) {
         </tbody>
       </table>
 
+      {meta.memo && meta.memo.trim() && (
+        <div style={{ marginTop: 18, fontSize: 12, color: '#1a1a1a', whiteSpace: 'pre-line', lineHeight: 1.7 }}>
+          {meta.memo}
+        </div>
+      )}
+
       {/* 합계 푸터 */}
-      <div style={{ borderTop: '1.5px solid #1a1a1a', paddingTop: 12 }}>
+      <div style={{ borderTop: '1.5px solid #1a1a1a', paddingTop: 12, marginTop: 'auto', flexShrink: 0 }}>
         {[
           ['Sub total', subTotal, false],
           ['Total (부가세 포함 금액)', totalWithVat, false],
@@ -984,7 +1043,8 @@ function PrintButton({ meta, values, customItems = [], discount, clients }) {
       .filter(item => calcItemSum(values[itemKey(item)] || {}) > 0)
       .map(item => {
         const v = values[itemKey(item)]
-        return { ...item, day: Number(v.day)||1, qty: Number(v.qty)||1, price: Number(v.price)||0 }
+        const displayName = (v.nameOverride && v.nameOverride.trim()) ? v.nameOverride.trim() : item.name
+        return { ...item, name: displayName, day: Number(v.day)||1, qty: Number(v.qty)||1, price: Number(v.price)||0 }
       }),
     ...customItems
       .filter(ci => ci.name && calcItemSum(ci) > 0)
@@ -1011,7 +1071,7 @@ function PrintButton({ meta, values, customItems = [], discount, clients }) {
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>견적서 - ${meta.project_title}</title>
 <style>*{box-sizing:border-box;margin:0;padding:0;}body{font-family:'Apple SD Gothic Neo','Noto Sans KR','Malgun Gothic',sans-serif;background:white;}
 @media print{@page{size:A4;margin:0;}body{margin:0;}}</style></head>
-<body><div style="width:794px;margin:0 auto;padding:56px 60px 80px;background:white;min-height:1123px;">
+<body><div style="width:794px;margin:0 auto;padding:56px 60px 80px;background:white;min-height:1123px;display:flex;flex-direction:column;">
 <div style="display:flex;justify-content:space-between;align-items:flex-end;padding-bottom:6px;">
   <div style="font-size:38px;font-weight:800;color:#1a1a1a;letter-spacing:-1px;">견적서</div>
   <div style="text-align:right;">${logo ? `<img src="${logo}" style="max-height:48px;max-width:160px;object-fit:contain;display:block;margin-left:auto;"/>` : `<div style="font-size:15px;font-weight:600;">${PROVIDER.name}</div>`}<div style="font-size:12px;color:#777;margin-top:3px;">${PROVIDER.bank}</div></div>
@@ -1035,7 +1095,8 @@ function PrintButton({ meta, values, customItems = [], discount, clients }) {
   <th style="padding:9px 0 9px 10px;text-align:right;font-size:13px;font-weight:700;">Sum</th>
 </tr></thead>
 <tbody>${rowsHtml}<tr style="height:40px;"></tr></tbody></table>
-<div style="border-top:1.5px solid #1a1a1a;padding-top:12px;">
+${meta.memo && meta.memo.trim() ? `<div style="margin-top:18px;font-size:12px;color:#1a1a1a;white-space:pre-line;line-height:1.7;">${String(meta.memo).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}</div>` : ''}
+<div style="border-top:1.5px solid #1a1a1a;padding-top:12px;margin-top:auto;flex-shrink:0;">
   <div style="display:flex;justify-content:space-between;padding:5px 0;"><span style="font-size:12px;color:#555;">Sub total</span><span style="font-size:13px;">${Number(subTotal).toLocaleString('ko-KR')}</span></div>
   <div style="display:flex;justify-content:space-between;padding:5px 0;"><span style="font-size:12px;color:#555;">Total (부가세 포함 금액)</span><span style="font-size:13px;">${Number(totalWithVat).toLocaleString('ko-KR')}</span></div>
   <div style="display:flex;justify-content:space-between;padding:5px 0;"><span style="font-size:12px;color:#555;">Round Down Total (만원 이하 절사${dcNote})</span><span style="font-size:13px;font-weight:600;">${Number(finalAmount).toLocaleString('ko-KR')}</span></div>
@@ -1056,6 +1117,69 @@ function PrintButton({ meta, values, customItems = [], discount, clients }) {
   )
 }
 
+// ── 헬퍼 컴포넌트 ─────────────────────────────────────────────────────────
+function EditableName({ defaultName, override, onChange, isFilled }) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(override || '')
+  useEffect(() => { setDraft(override || '') }, [override])
+  const display = override && override.trim() ? override : defaultName
+  if (editing) {
+    return (
+      <input
+        autoFocus
+        value={draft}
+        onChange={e => setDraft(e.target.value)}
+        onBlur={() => { onChange(draft.trim()); setEditing(false) }}
+        onKeyDown={e => {
+          if (e.key === 'Enter') { onChange(draft.trim()); setEditing(false) }
+          if (e.key === 'Escape') { setDraft(override || ''); setEditing(false) }
+        }}
+        placeholder={defaultName}
+        style={{
+          width: '100%', padding: '3px 6px', fontSize: 13, border: '1px solid #2563eb',
+          borderRadius: 4, background: '#fff', outline: 'none',
+          color: isFilled ? '#1e40af' : '#374151', fontWeight: isFilled ? 600 : 400,
+        }}
+      />
+    )
+  }
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
+      title="클릭하여 항목명 수정 (이 견적서에만 적용)"
+      onClick={() => setEditing(true)}>
+      <span style={{ borderBottom: '1px dashed transparent' }}
+        onMouseEnter={e => e.currentTarget.style.borderBottomColor = '#cbd5e1'}
+        onMouseLeave={e => e.currentTarget.style.borderBottomColor = 'transparent'}>
+        {display}
+      </span>
+      {override && override.trim() && (
+        <button type="button"
+          onClick={e => { e.stopPropagation(); onChange('') }}
+          title="원본으로 되돌리기"
+          style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#94a3b8', fontSize: 11, padding: 0 }}>
+          ↺
+        </button>
+      )}
+    </span>
+  )
+}
+
+function BumpHeader({ label, onUp, onDown }) {
+  const btn = {
+    border: 'none', background: 'none', cursor: 'pointer',
+    color: '#64748b', fontSize: 9, lineHeight: 1, padding: 0, display: 'block',
+  }
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, justifyContent: 'center' }}>
+      {label}
+      <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 1 }}>
+        <button type="button" onClick={onUp} style={btn} title={`${label} 일괄 +1`}>▲</button>
+        <button type="button" onClick={onDown} style={btn} title={`${label} 일괄 -1`}>▼</button>
+      </span>
+    </span>
+  )
+}
+
 // ── 목록에서 미리보기 (저장된 견적서) ─────────────────────────────────────
 function QuotePreviewModal({ quote, clients, onClose }) {
   const [showCompModal, setShowCompModal] = useState(false)
@@ -1067,6 +1191,7 @@ function QuotePreviewModal({ quote, clients, onClose }) {
     client_name_override: quote.client_name_override || '',
     project_title: quote.project_title,
     status: quote.status,
+    memo: quote.memo || '',
   }
   const discount = { is_first_deal: quote.is_first_deal, discount_rate: quote.discount_rate }
   const clientName = quote.clients?.name || quote.client_name_override || ''
