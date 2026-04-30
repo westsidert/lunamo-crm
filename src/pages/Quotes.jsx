@@ -1068,7 +1068,8 @@ function PrintButton({ meta, values, customItems = [], discount, clients }) {
       </tr>`).join('')
   }).join('')
 
-  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>견적서 - ${meta.project_title}</title>
+  const fileTitle = `루나모 견적서(${qdStr.replace(/\.$/, '')}) - ${meta.project_title}`
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${fileTitle}</title>
 <style>*{box-sizing:border-box;margin:0;padding:0;}body{font-family:'Apple SD Gothic Neo','Noto Sans KR','Malgun Gothic',sans-serif;background:white;}
 @media print{@page{size:A4;margin:0;}body{margin:0;}}</style></head>
 <body><div style="width:794px;margin:0 auto;padding:56px 60px 80px;background:white;min-height:1123px;display:flex;flex-direction:column;">
