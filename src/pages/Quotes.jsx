@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { getQuotes, createQuote, updateQuote, deleteQuote, getClients } from '../lib/api'
 import { formatKRW } from '../lib/utils'
-import { analyzeQuoteRequest, hasAiKey, getAiKey, setAiKey, getLogo, getStamp, setLogo, setStamp } from '../lib/ai'
+import { analyzeQuoteRequest, matchClient, hasAiKey, getAiKey, setAiKey, getLogo, getStamp, setLogo, setStamp } from '../lib/ai'
 
 // ── 전체 항목 정의 (엑셀 산출 양식 기반) ─────────────────────────────────
 const ALL_ITEMS = [
@@ -480,9 +480,21 @@ function QuoteWizard({ initial, clients, pastQuotes = [], onClose, onSave }) {
                     setAiError(''); setAiLoading(true); setAiNote('')
                     try {
                       const result = await analyzeQuoteRequest(aiDesc, pastQuotes, ALL_ITEMS)
-                      // 프로젝트명·거래처명 자동 입력
+                      // 프로젝트명 자동 입력
                       if (result.project_title) setMeta_('project_title', result.project_title)
-                      if (result.client_name) setMeta_('client_name_override', result.client_name)
+                      // 거래처: DB에 있는 거래처면 client_id로, 없으면 직접입력 필드로
+                      if (result.client_name) {
+                        const matched = matchClient(result.client_name, clients)
+                        if (matched) {
+                          setMeta_('client_id', matched.id)
+                          setMeta_('client_name_override', '')
+                        } else {
+                          setMeta_('client_id', '')
+                          setMeta_('client_name_override', result.client_name)
+                        }
+                      }
+                      // 메모 자동 입력 (사용자가 비워둔 경우만)
+                      if (result.memo && !meta.memo) setMeta_('memo', result.memo)
                       // 결과를 values에 반영
                       const newValues = initValues()
                       const newCustom = []
