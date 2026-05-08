@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { getQuotes, createQuote, updateQuote, deleteQuote, getClients } from '../lib/api'
+import { getQuotes, createQuote, updateQuote, deleteQuote, getClients, createProjectFromQuote } from '../lib/api'
 import { formatKRW } from '../lib/utils'
 import { analyzeQuoteRequest, matchClient, hasAiKey, getAiKey, setAiKey, getLogo, getStamp, setLogo, setStamp } from '../lib/ai'
 
@@ -207,6 +207,24 @@ export default function Quotes() {
     setQuotes(prev => prev.filter(q => q.id !== id))
   }
 
+  const handleConvertToProject = async (q) => {
+    const msg = q.status === '수주'
+      ? `"${q.project_title}" 견적서를 프로젝트로 전환하시겠습니까?\n\n· 거래처·프로젝트명·예산이 자동 복사됩니다\n· 견적 항목이 프로젝트 메모에 들어갑니다`
+      : `이 견적서는 "${q.status}" 상태입니다.\n그래도 프로젝트로 전환하시겠습니까?`
+    if (!confirm(msg)) return
+    try {
+      // quote_items가 같이 로드되어 있어야 함 — getQuotes()가 이미 가져옴
+      const { project, alreadyExists } = await createProjectFromQuote(q)
+      if (alreadyExists) {
+        alert(`이미 이 견적서로 생성된 프로젝트가 있습니다: "${project.name}"`)
+      } else {
+        alert(`프로젝트 "${project.name}"가 생성되었습니다. 프로젝트 메뉴에서 확인하세요.`)
+      }
+    } catch (e) {
+      alert('프로젝트 전환 실패: ' + (e.message || e))
+    }
+  }
+
   return (
     <div style={{ padding: '28px 32px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
@@ -256,6 +274,12 @@ export default function Quotes() {
                     <div style={{ display: 'flex', gap: 4 }}>
                       <button onClick={() => openPreview(q)} style={btnSmall}>미리보기</button>
                       <button onClick={() => openEdit(q)} style={btnSmall}>수정</button>
+                      <button
+                        onClick={() => handleConvertToProject(q)}
+                        style={{ ...btnSmall, color: q.status === '수주' ? '#16a34a' : '#94a3b8' }}
+                        title={q.status === '수주' ? '프로젝트로 전환' : '수주 상태에서 사용 권장'}>
+                        📋 프로젝트화
+                      </button>
                       <button onClick={() => handleDelete(q.id)} style={{ ...btnSmall, color: '#ef4444' }}>삭제</button>
                     </div>
                   </td>

@@ -22,6 +22,7 @@ create table projects (
   end_date date,
   description text,
   total_budget numeric default 0,
+  quote_id uuid references quotes(id) on delete set null,
   created_at timestamptz default now()
 );
 
