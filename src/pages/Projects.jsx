@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { getProjects, createProject, updateProject, deleteProject, getClients, getTransactions } from '../lib/api'
-import { formatKRW, formatDate, STATUS_COLORS } from '../lib/utils'
+import { formatKRW, formatDate } from '../lib/utils'
 import Modal, { FormRow, Input, Select, Textarea, FormActions } from '../components/Modal'
 
 const EMPTY = { name: '', client_id: '', status: '진행중', start_date: '', end_date: '', description: '', total_budget: '' }
@@ -10,7 +10,6 @@ export default function Projects() {
   const [clients, setClients] = useState([])
   const [transactions, setTransactions] = useState([])
   const [modal, setModal] = useState(null)
-  const [filterStatus, setFilterStatus] = useState('')
   const [loading, setLoading] = useState(true)
 
   useEffect(() => { loadAll() }, [])
@@ -36,7 +35,21 @@ export default function Projects() {
     return { sales, purchase, labor, profit, margin }
   }
 
-  const filtered = projects.filter(p => !filterStatus || p.status === filterStatus)
+  // 칸반 컬럼 정의 (사용자 요청 순서)
+  const KANBAN_COLS = ['진행중', '보류', '취소', '완료']
+  const colData = KANBAN_COLS.map(status => {
+    const items = projects.filter(p => p.status === status)
+    const totalBudget = items.reduce((s, p) => s + (Number(p.total_budget) || 0), 0)
+    return { status, items, totalBudget }
+  })
+
+  const daysSince = (dateStr) => {
+    if (!dateStr) return null
+    const d = new Date(dateStr)
+    const now = new Date()
+    const diff = Math.floor((now - d) / (1000 * 60 * 60 * 24))
+    return diff
+  }
 
   const handleSave = async (data) => {
     if (modal === 'create' || !modal.id) {
@@ -65,90 +78,123 @@ export default function Projects() {
         <button onClick={() => setModal('create')} style={btnPrimary}>+ 프로젝트 추가</button>
       </div>
 
-      {/* Status filter */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
-        {['', '진행중', '완료', '보류', '취소'].map(s => (
-          <button key={s} onClick={() => setFilterStatus(s)} style={{
-            padding: '6px 14px', borderRadius: 20, border: '1px solid',
-            borderColor: filterStatus === s ? '#2563eb' : '#e2e8f0',
-            background: filterStatus === s ? '#eff6ff' : '#fff',
-            color: filterStatus === s ? '#2563eb' : '#64748b',
-            cursor: 'pointer', fontSize: 13, fontWeight: filterStatus === s ? 600 : 400,
-          }}>
-            {s || '전체'}
-            {s && ` (${projects.filter(p => p.status === s).length})`}
-          </button>
-        ))}
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))', gap: 16 }}>
-        {loading ? (
-          <div style={{ color: '#94a3b8', gridColumn: '1/-1', textAlign: 'center', padding: 40 }}>불러오는 중...</div>
-        ) : filtered.length === 0 ? (
-          <div style={{ color: '#94a3b8', gridColumn: '1/-1', textAlign: 'center', padding: 40, fontSize: 13 }}>프로젝트가 없습니다</div>
-        ) : filtered.map(p => {
-          const stats = getProjectStats(p.id)
-          return (
-            <div key={p.id} style={{ background: '#fff', borderRadius: 14, padding: '20px', border: '1px solid #e2e8f0' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
-                <span style={{
-                  padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600,
-                  ...statusStyle(p.status),
-                }}>{p.status}</span>
-                <div style={{ display: 'flex', gap: 6 }}>
-                  <button onClick={() => setModal(p)} style={btnSmall}>수정</button>
-                  <button onClick={() => {
-                    const { id, clients, ...rest } = p
-                    setModal(rest)
-                  }} style={{ ...btnSmall, color: '#0891b2', borderColor: '#a5f3fc' }}>복제</button>
-                  <button onClick={() => handleDelete(p.id)} style={{ ...btnSmall, color: '#ef4444' }}>삭제</button>
-                </div>
-              </div>
-
-              <div style={{ fontSize: 16, fontWeight: 700, color: '#0f172a', marginBottom: 6 }}>{p.name}</div>
-              {p.clients?.name && (
-                <div style={{ fontSize: 13, color: '#64748b', marginBottom: 10 }}>🏢 {p.clients.name}</div>
-              )}
-
-              <div style={{ display: 'flex', gap: 12, fontSize: 12, color: '#94a3b8', marginBottom: 14 }}>
-                {p.start_date && <span>📅 {formatDate(p.start_date)}</span>}
-                {p.end_date && <span>→ {formatDate(p.end_date)}</span>}
-              </div>
-
-              {p.description && (
-                <div style={{ fontSize: 12, color: '#64748b', marginBottom: 14, lineHeight: 1.5 }}>{p.description}</div>
-              )}
-
-              <div style={{ borderTop: '1px solid #f1f5f9', paddingTop: 12, display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
-                <Stat label="매출" value={formatKRW(stats.sales)} color="#2563eb" />
-                <Stat label="매입" value={formatKRW(stats.purchase)} color="#d97706" />
-                <Stat label="외주인건비" value={formatKRW(stats.labor)} color="#7c3aed" />
-                <Stat
-                  label={stats.margin !== null ? `순이익 (${stats.margin}%)` : '순이익'}
-                  value={formatKRW(stats.profit)}
-                  color={stats.profit >= 0 ? '#059669' : '#dc2626'}
-                />
-              </div>
-
-              {p.total_budget > 0 && (
-                <div style={{ marginTop: 10 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>
-                    <span>예산 대비 매출</span>
-                    <span>{Math.min(100, Math.round(stats.sales / p.total_budget * 100))}%</span>
+      {/* 칸반 보드 */}
+      {loading ? (
+        <div style={{ color: '#94a3b8', textAlign: 'center', padding: 40 }}>불러오는 중...</div>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 14, alignItems: 'start' }}>
+          {colData.map(({ status, items, totalBudget }) => {
+            const accent = statusStyle(status)
+            return (
+              <div key={status} style={{
+                background: '#f8fafc', borderRadius: 12, border: '1px solid #e2e8f0',
+                display: 'flex', flexDirection: 'column', minHeight: 200,
+              }}>
+                {/* 컬럼 헤더 */}
+                <div style={{ padding: '12px 14px', borderBottom: '1px solid #e2e8f0' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ fontSize: 14, fontWeight: 700, color: accent.color }}>{status}</span>
+                      <span style={{
+                        fontSize: 11, fontWeight: 700, padding: '1px 8px', borderRadius: 10,
+                        background: accent.background, color: accent.color,
+                      }}>{items.length}</span>
+                    </div>
                   </div>
-                  <div style={{ height: 6, background: '#f1f5f9', borderRadius: 3, overflow: 'hidden' }}>
-                    <div style={{
-                      height: '100%', borderRadius: 3, background: '#3b82f6',
-                      width: `${Math.min(100, stats.sales / p.total_budget * 100)}%`,
-                      transition: 'width 0.3s',
-                    }} />
+                  <div style={{ fontSize: 11, color: '#94a3b8' }}>
+                    예산 합계 · ₩{formatKRW(totalBudget)}
                   </div>
                 </div>
-              )}
-            </div>
-          )
-        })}
-      </div>
+
+                {/* 카드 리스트 */}
+                <div style={{ padding: 10, display: 'flex', flexDirection: 'column', gap: 10, flex: 1 }}>
+                  {items.length === 0 ? (
+                    <div style={{ textAlign: 'center', padding: '24px 0', color: '#cbd5e1', fontSize: 13 }}>없음</div>
+                  ) : items.map(p => {
+                    const stats = getProjectStats(p.id)
+                    const aging = p.start_date ? daysSince(p.start_date) : null
+                    return (
+                      <div key={p.id} style={{
+                        background: '#fff', borderRadius: 10, padding: '12px 14px',
+                        border: '1px solid #e2e8f0',
+                        borderLeft: `4px solid ${accent.color || '#cbd5e1'}`,
+                      }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, marginBottom: 6 }}>
+                          <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a', lineHeight: 1.35 }}>{p.name}</div>
+                          {aging !== null && aging >= 0 && (
+                            <span style={{
+                              flexShrink: 0, padding: '1px 7px', borderRadius: 10, fontSize: 10, fontWeight: 600,
+                              background: aging > 90 ? '#fef2f2' : aging > 30 ? '#fffbeb' : '#f1f5f9',
+                              color: aging > 90 ? '#dc2626' : aging > 30 ? '#d97706' : '#64748b',
+                            }}>D+{aging}</span>
+                          )}
+                        </div>
+                        {p.clients?.name && (
+                          <div style={{ fontSize: 12, color: '#64748b', marginBottom: 4 }}>🏢 {p.clients.name}</div>
+                        )}
+                        <div style={{ display: 'flex', gap: 10, fontSize: 11, color: '#94a3b8', marginBottom: 8, flexWrap: 'wrap' }}>
+                          {p.start_date && <span>📅 {formatDate(p.start_date)}</span>}
+                          {p.end_date && <span>→ {formatDate(p.end_date)}</span>}
+                        </div>
+                        {p.total_budget > 0 && (
+                          <div style={{ fontSize: 13, fontWeight: 700, color: '#0f172a', marginBottom: 8 }}>
+                            ₩ {formatKRW(p.total_budget)}
+                          </div>
+                        )}
+
+                        {/* 매출/이익 한 줄 요약 */}
+                        {(stats.sales > 0 || stats.profit !== 0) && (
+                          <div style={{ fontSize: 11, color: '#64748b', marginBottom: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                            <span>매출 <b style={{ color: '#2563eb' }}>{formatKRW(stats.sales)}</b></span>
+                            <span>이익 <b style={{ color: stats.profit >= 0 ? '#059669' : '#dc2626' }}>{formatKRW(stats.profit)}</b>
+                              {stats.margin !== null && <span style={{ color: '#94a3b8' }}> ({stats.margin}%)</span>}
+                            </span>
+                          </div>
+                        )}
+
+                        {/* 예산 대비 매출 바 */}
+                        {p.total_budget > 0 && (
+                          <div style={{ marginBottom: 10 }}>
+                            <div style={{ height: 4, background: '#f1f5f9', borderRadius: 2, overflow: 'hidden' }}>
+                              <div style={{
+                                height: '100%', borderRadius: 2, background: '#3b82f6',
+                                width: `${Math.min(100, stats.sales / p.total_budget * 100)}%`,
+                              }} />
+                            </div>
+                          </div>
+                        )}
+
+                        <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
+                          <button onClick={() => setModal(p)} style={btnSmall}>수정</button>
+                          <button onClick={() => {
+                            const { id, clients, ...rest } = p
+                            setModal(rest)
+                          }} style={{ ...btnSmall, color: '#0891b2', borderColor: '#a5f3fc' }}>복제</button>
+                          <button onClick={() => handleDelete(p.id)} style={{ ...btnSmall, color: '#ef4444' }}>삭제</button>
+                        </div>
+                      </div>
+                    )
+                  })}
+
+                  {/* 빠른 추가 */}
+                  <button
+                    onClick={() => setModal({ ...EMPTY, status })}
+                    style={{
+                      marginTop: items.length === 0 ? 0 : 4,
+                      padding: '8px', borderRadius: 8, border: '1px dashed #cbd5e1',
+                      background: 'transparent', color: '#94a3b8', cursor: 'pointer',
+                      fontSize: 12, fontWeight: 500,
+                    }}
+                    onMouseEnter={e => { e.currentTarget.style.borderColor = accent.color || '#94a3b8'; e.currentTarget.style.color = accent.color || '#475569' }}
+                    onMouseLeave={e => { e.currentTarget.style.borderColor = '#cbd5e1'; e.currentTarget.style.color = '#94a3b8' }}>
+                    + 추가
+                  </button>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
 
       {modal && (
         <ProjectModal
@@ -220,15 +266,6 @@ function ProjectModal({ project, clients, onClose, onSave }) {
         <FormActions onClose={onClose} loading={loading} />
       </form>
     </Modal>
-  )
-}
-
-function Stat({ label, value, color }) {
-  return (
-    <div>
-      <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 2 }}>{label}</div>
-      <div style={{ fontSize: 13, fontWeight: 600, color }}>{value}원</div>
-    </div>
   )
 }
 
