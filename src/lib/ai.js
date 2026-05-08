@@ -35,10 +35,13 @@ ${examplesDesc ? `## 과거 견적 참고 사례 (실제 수주 금액 기준)\n
 - 실제로 필요한 항목만 포함 (0인 항목 제외)
 - day·qty는 양의 정수, price는 숫자
 - 항목 목록에 없는 경우 적절한 cat·sub를 지정하여 추가 가능
-- note 필드: 주요 가정과 산정 근거를 한두 문장으로
+- 의뢰 내용에서 **프로젝트명(project_title)**, **거래처명(client_name)**, **목표 예산(budget_total, budget_includes_vat)**을 추출해서 응답에 포함
+- 의뢰 내용에 명시된 정보가 없으면 해당 필드는 빈 문자열 또는 null
+- **목표 예산이 명시되어 있으면**, 모든 항목의 price·day·qty를 조정하여 합계(부가세 포함 또는 별도 여부에 맞춰)가 그 예산에 맞도록 설계할 것. 부가세 포함이면 sum × 1.1 ≈ budget_total, 부가세 별도면 sum ≈ budget_total
+- note: 주요 가정과 산정 근거, 예산 적용 방식 한두 문장으로
 
 ## 응답 형식
-{"items":[{"cat":"Pre-production","sub":"기획","name":"기획료","day":2,"qty":1,"price":300000}],"note":"분석 근거..."}`
+{"project_title":"...","client_name":"...","budget_total":5000000,"budget_includes_vat":true,"items":[{"cat":"Pre-production","sub":"기획","name":"기획료","day":2,"qty":1,"price":300000}],"note":"분석 근거..."}`
 
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',

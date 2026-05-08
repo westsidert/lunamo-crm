@@ -480,13 +480,16 @@ function QuoteWizard({ initial, clients, pastQuotes = [], onClose, onSave }) {
                     setAiError(''); setAiLoading(true); setAiNote('')
                     try {
                       const result = await analyzeQuoteRequest(aiDesc, pastQuotes, ALL_ITEMS)
+                      // 프로젝트명·거래처명 자동 입력
+                      if (result.project_title) setMeta_('project_title', result.project_title)
+                      if (result.client_name) setMeta_('client_name_override', result.client_name)
                       // 결과를 values에 반영
                       const newValues = initValues()
                       const newCustom = []
                       result.items.forEach(item => {
                         const match = ALL_ITEMS.find(a => a.name === item.name && a.cat === item.cat)
                         if (match) {
-                          newValues[itemKey(match)] = { day: item.day, qty: item.qty, price: item.price ?? match.price }
+                          newValues[itemKey(match)] = { day: item.day, qty: item.qty, price: item.price ?? match.price, nameOverride: '' }
                         } else {
                           newCustom.push({ _id: Math.random(), cat: item.cat || '기타', name: item.name, day: item.day, qty: item.qty, price: item.price ?? 0 })
                         }
