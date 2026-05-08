@@ -209,16 +209,18 @@ export default function Quotes() {
 
   const handleConvertToProject = async (q) => {
     const msg = q.status === '수주'
-      ? `"${q.project_title}" 견적서를 프로젝트로 전환하시겠습니까?\n\n· 거래처·프로젝트명·예산이 자동 복사됩니다\n· 견적 항목이 프로젝트 메모에 들어갑니다`
+      ? `"${q.project_title}" 견적서를 프로젝트로 전환하시겠습니까?\n\n· 프로젝트명·거래처·예산이 자동 복사됩니다\n· 거래처가 미등록 상태면 자동 등록됩니다`
       : `이 견적서는 "${q.status}" 상태입니다.\n그래도 프로젝트로 전환하시겠습니까?`
     if (!confirm(msg)) return
     try {
       // quote_items가 같이 로드되어 있어야 함 — getQuotes()가 이미 가져옴
-      const { project, alreadyExists } = await createProjectFromQuote(q)
+      const { project, alreadyExists, clientCreated } = await createProjectFromQuote(q)
       if (alreadyExists) {
         alert(`이미 이 견적서로 생성된 프로젝트가 있습니다: "${project.name}"`)
       } else {
-        alert(`프로젝트 "${project.name}"가 생성되었습니다. 프로젝트 메뉴에서 확인하세요.`)
+        const clientMsg = clientCreated ? '\n· 거래처도 새로 등록되었습니다' : ''
+        alert(`프로젝트 "${project.name}"가 생성되었습니다.${clientMsg}\n프로젝트 메뉴에서 확인하세요.`)
+        await loadAll()
       }
     } catch (e) {
       alert('프로젝트 전환 실패: ' + (e.message || e))

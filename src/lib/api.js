@@ -57,37 +57,47 @@ export const deleteProject = async (id) => {
 }
 
 // 견적서를 프로젝트로 전환 (수주 시점에 사용)
+// - 거래처가 client_id로 연결돼 있으면 그대로 사용
+// - 거래처가 직접입력(client_name_override)만 있으면 clients 테이블에 먼저 등록 후 연결
 export const createProjectFromQuote = async (quote) => {
   // 이미 같은 견적에서 만든 프로젝트가 있는지 확인
   const { data: existing } = await supabase
     .from('projects').select('id, name').eq('quote_id', quote.id).maybeSingle()
   if (existing) {
-    return { project: existing, alreadyExists: true }
+    return { project: existing, alreadyExists: true, clientCreated: false }
   }
-  const items = (quote.quote_items || []).sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))
-  const itemSummary = items
-    .map(it => `· [${it.category}] ${it.contents}: ${Number(it.each_price).toLocaleString()}원 × ${it.qty}수량 × ${it.day}일`)
-    .join('\n')
-  const description = [
-    `[견적서 기반 자동 생성]`,
-    `견적일: ${quote.quote_date}`,
-    quote.memo ? `\n${quote.memo}\n` : '',
-    `\n견적 항목:\n${itemSummary}`,
-  ].filter(Boolean).join('\n')
+
+  // 거래처 결정
+  let clientId = quote.client_id || null
+  let clientCreated = false
+  if (!clientId && quote.client_name_override && quote.client_name_override.trim()) {
+    const name = quote.client_name_override.trim()
+    // 같은 이름의 거래처가 이미 있는지 한번 더 체크 (중복 방지)
+    const { data: existingClient } = await supabase
+      .from('clients').select('id').eq('name', name).maybeSingle()
+    if (existingClient) {
+      clientId = existingClient.id
+    } else {
+      const { data: newClient, error: ce } = await supabase
+        .from('clients').insert({ name }).select('id').single()
+      if (ce) throw ce
+      clientId = newClient.id
+      clientCreated = true
+    }
+  }
 
   const payload = {
     name: quote.project_title,
-    client_id: quote.client_id || null,
+    client_id: clientId,
     status: '진행중',
     start_date: new Date().toISOString().slice(0, 10),
-    description,
     total_budget: Number(quote.final_amount) || 0,
     quote_id: quote.id,
   }
   const { data, error } = await supabase
     .from('projects').insert(payload).select('*, clients(name)').single()
   if (error) throw error
-  return { project: data, alreadyExists: false }
+  return { project: data, alreadyExists: false, clientCreated }
 }
 
 // ── 거래 (매입/매출) ──────────────────────────────
