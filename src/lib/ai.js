@@ -1,6 +1,8 @@
-export const hasAiKey = () => !!localStorage.getItem('anthropic_key')
-export const getAiKey = () => localStorage.getItem('anthropic_key') || ''
-export const setAiKey = (k) => localStorage.setItem('anthropic_key', k.trim())
+import { supabase } from './supabase'
+
+// AI 호출이 서버사이드(api/analyze-quote.js)로 이전되어 브라우저 키 불필요.
+// 과거 localStorage에 저장된 키는 제거.
+try { localStorage.removeItem('anthropic_key') } catch { /* SSR 등 */ }
 
 export const getLogo  = () => localStorage.getItem('company_logo') || ''
 export const getStamp = () => localStorage.getItem('company_stamp') || ''
@@ -158,42 +160,34 @@ ${examplesDesc ? `## 의뢰 내용과 유사한 과거 수주 사례 (가격 구
 }`
 }
 
-const callAnthropic = async (key, system, userContent) => {
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
+const callAnalyzeApi = async (system, userContent) => {
+  const { data: { session } } = await supabase.auth.getSession()
+  if (!session) throw new Error('로그인이 필요합니다')
+
+  const res = await fetch('/api/analyze-quote', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-api-key': key,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true',
+      'Authorization': `Bearer ${session.access_token}`,
     },
-    body: JSON.stringify({
-      model: 'claude-opus-4-6',
-      max_tokens: 4096,
-      system,
-      messages: [{ role: 'user', content: userContent }],
-    }),
+    body: JSON.stringify({ system, userContent }),
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
-    throw new Error(err.error?.message || `API 오류 (${res.status})`)
+    throw new Error(err.error || `API 오류 (${res.status})`)
   }
-  const data = await res.json()
-  const text = data.content[0]?.text || ''
-  const match = text.match(/\{[\s\S]*\}/)
+  const { text } = await res.json()
+  const match = (text || '').match(/\{[\s\S]*\}/)
   if (!match) throw new Error('AI 응답을 파싱할 수 없습니다')
   return JSON.parse(match[0])
 }
 
 export const analyzeQuoteRequest = async (description, pastQuotes = [], allItems = []) => {
-  const key = getAiKey()
-  if (!key) throw new Error('Anthropic API 키가 설정되지 않았습니다')
-
   const similarQuotes = pickSimilarQuotes(description, pastQuotes, 3)
   const system = buildSystemPrompt(allItems, similarQuotes)
 
   // 1차 호출
-  let result = await callAnthropic(key, system, `다음 프로젝트 의뢰 내용을 분석하여 가견적을 산출해주세요:\n\n${description}`)
+  let result = await callAnalyzeApi(system, `다음 프로젝트 의뢰 내용을 분석하여 가견적을 산출해주세요:\n\n${description}`)
 
   // 2차 검증·재조정 (예산 strict + 5% 이상 어긋날 때)
   if (result.budget_total && result.items && result.budget_priority !== 'quality_first') {
@@ -205,7 +199,7 @@ export const analyzeQuoteRequest = async (description, pastQuotes = [], allItems
     const tolerance = result.budget_priority === 'strict' ? 0.03 : 0.10
     if (diff > tolerance) {
       try {
-        const reconciled = await callAnthropic(key, system,
+        const reconciled = await callAnalyzeApi(system,
           `이전 응답의 합계가 ${sum.toLocaleString()}원인데 목표 합계(부가세 ${result.budget_includes_vat ? '포함' : '별도'} ${result.budget_total.toLocaleString()}원 기준)는 ${target.toLocaleString()}원입니다. ` +
           `항목 구성은 유지하되 price·day·qty를 조정해서 합계가 ${target.toLocaleString()}원에 ±${Math.round(tolerance*100)}% 이내가 되도록 재산출해주세요. ` +
           `이전 응답의 다른 필드(project_title, client_name, video_type, deliverables, memo, note 등)는 그대로 유지하세요.\n\n원래 의뢰 내용:\n${description}\n\n이전 응답:\n${JSON.stringify(result)}`)

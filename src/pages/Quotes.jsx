@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { getQuotes, createQuote, updateQuote, deleteQuote, getClients, createProjectFromQuote } from '../lib/api'
 import { formatKRW } from '../lib/utils'
-import { analyzeQuoteRequest, matchClient, hasAiKey, getAiKey, setAiKey, getLogo, getStamp, setLogo, setStamp } from '../lib/ai'
+import { analyzeQuoteRequest, matchClient, getLogo, getStamp, setLogo, setStamp } from '../lib/ai'
+import { supabase } from '../lib/supabase'
 
 // ── 전체 항목 정의 (엑셀 산출 양식 기반) ─────────────────────────────────
 const ALL_ITEMS = [
@@ -331,8 +332,6 @@ function QuoteWizard({ initial, clients, pastQuotes = [], onClose, onSave }) {
   const [aiLoading, setAiLoading]   = useState(false)
   const [aiNote, setAiNote]         = useState('')
   const [aiError, setAiError]       = useState('')
-  const [aiKeyInput, setAiKeyInput] = useState(getAiKey())
-  const [showKeyInput, setShowKeyInput] = useState(!hasAiKey())
 
   const setMeta_ = (k, v) => setMeta(m => ({ ...m, [k]: v }))
   const setVal   = (key, field, v) => setValues(prev => ({ ...prev, [key]: { ...prev[key], [field]: v } }))
@@ -431,41 +430,6 @@ function QuoteWizard({ initial, clients, pastQuotes = [], onClose, onSave }) {
                 산출 양식에 항목을 자동으로 채워드립니다. 이후 직접 수정·확인하실 수 있습니다.
               </p>
 
-              {/* API 키 설정 */}
-              {showKeyInput ? (
-                <div style={{ background: '#fafafa', border: '1px solid #e2e8f0', borderRadius: 10, padding: '16px 20px', marginBottom: 20 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: '#475569', marginBottom: 8 }}>
-                    🔑 Anthropic API 키 설정
-                    <span style={{ fontSize: 12, fontWeight: 400, color: '#94a3b8', marginLeft: 8 }}>
-                      <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer" style={{ color: '#2563eb' }}>console.anthropic.com</a>에서 발급
-                    </span>
-                  </div>
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <input
-                      type="password"
-                      value={aiKeyInput}
-                      onChange={e => setAiKeyInput(e.target.value)}
-                      placeholder="sk-ant-..."
-                      style={{ ...inputStyle, fontFamily: 'monospace', flex: 1 }}
-                    />
-                    <button
-                      onClick={() => { setAiKey(aiKeyInput); setShowKeyInput(false) }}
-                      disabled={!aiKeyInput.startsWith('sk-ant')}
-                      style={{ ...btnPrimary, background: '#7c3aed', whiteSpace: 'nowrap',
-                        opacity: !aiKeyInput.startsWith('sk-ant') ? 0.5 : 1 }}>
-                      저장
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
-                  <button onClick={() => setShowKeyInput(true)}
-                    style={{ fontSize: 12, color: '#94a3b8', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}>
-                    API 키 변경
-                  </button>
-                </div>
-              )}
-
               {/* 의뢰 내용 입력 */}
               <div style={{ marginBottom: 16 }}>
                 <label style={{ ...labelStyle, marginBottom: 8 }}>프로젝트 의뢰 내용</label>
@@ -502,7 +466,6 @@ function QuoteWizard({ initial, clients, pastQuotes = [], onClose, onSave }) {
                 <button
                   onClick={async () => {
                     if (!aiDesc.trim()) { setAiError('의뢰 내용을 입력해주세요'); return }
-                    if (!hasAiKey()) { setAiError('API 키를 먼저 설정해주세요'); return }
                     setAiError(''); setAiLoading(true); setAiNote('')
                     try {
                       const result = await analyzeQuoteRequest(aiDesc, pastQuotes, ALL_ITEMS)
@@ -542,10 +505,10 @@ function QuoteWizard({ initial, clients, pastQuotes = [], onClose, onSave }) {
                     }
                     setAiLoading(false)
                   }}
-                  disabled={aiLoading || !aiDesc.trim() || showKeyInput}
+                  disabled={aiLoading || !aiDesc.trim()}
                   style={{ ...btnPrimary, background: '#7c3aed', display: 'flex', alignItems: 'center', gap: 8,
-                    opacity: (aiLoading || !aiDesc.trim() || showKeyInput) ? 0.6 : 1,
-                    cursor: (aiLoading || !aiDesc.trim() || showKeyInput) ? 'not-allowed' : 'pointer' }}>
+                    opacity: (aiLoading || !aiDesc.trim()) ? 0.6 : 1,
+                    cursor: (aiLoading || !aiDesc.trim()) ? 'not-allowed' : 'pointer' }}>
                   {aiLoading ? (
                     <>
                       <span style={{ display: 'inline-block', width: 14, height: 14, border: '2px solid #fff', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
@@ -1101,7 +1064,7 @@ function PrintButton({ meta, values, customItems = [], discount, clients }) {
     return items.map((item, idx) => `
       <tr style="border-bottom:1px solid #f0f0f0;">
         <td style="padding:7px 8px 7px 0;font-size:12px;color:#777;vertical-align:top;width:90px;">${idx===0?cat:''}</td>
-        <td style="padding:7px 10px;font-size:13px;color:#1a1a1a;">${item.name}</td>
+        <td style="padding:7px 10px;font-size:13px;color:#1a1a1a;">${(item.name || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))}</td>
         <td style="padding:7px 10px;text-align:right;font-size:13px;">${item.price.toLocaleString('ko-KR')}</td>
         <td style="padding:7px 10px;text-align:center;font-size:13px;">${item.qty}</td>
         <td style="padding:7px 10px;text-align:center;font-size:13px;">${item.day}</td>
@@ -1109,8 +1072,9 @@ function PrintButton({ meta, values, customItems = [], discount, clients }) {
       </tr>`).join('')
   }).join('')
 
+  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
   const fileTitle = `루나모 견적서(${qdStr.replace(/\.$/, '')}) - ${meta.project_title}`
-  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${fileTitle}</title>
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(fileTitle)}</title>
 <style>*{box-sizing:border-box;margin:0;padding:0;}body{font-family:'Apple SD Gothic Neo','Noto Sans KR','Malgun Gothic',sans-serif;background:white;}
 @media print{@page{size:A4;margin:0;}body{margin:0;}}</style></head>
 <body><div style="width:794px;margin:0 auto;padding:56px 60px 80px;background:white;min-height:1123px;display:flex;flex-direction:column;">
@@ -1122,11 +1086,11 @@ function PrintButton({ meta, values, customItems = [], discount, clients }) {
 <div style="display:grid;grid-template-columns:1.4fr 0.65fr 1.2fr 1.5fr;">
   <div style="padding:14px 14px 14px 0;border-right:1px solid #e0e0e0;"><div style="font-size:11px;color:#999;margin-bottom:10px;">Provider Info.</div><div style="position:relative;"><div style="font-size:13px;font-weight:600;margin-bottom:3px;">${PROVIDER.name}</div><div style="font-size:11px;color:#555;margin-bottom:2px;">${PROVIDER.bizno}</div><div style="font-size:11px;color:#555;margin-bottom:2px;line-height:1.5;">${PROVIDER.address.replace('\n', '<br>')}</div><div style="font-size:11px;color:#555;">대표 ${PROVIDER.rep}</div>${stamp ? `<img src="${stamp}" style="position:absolute;right:0;top:-6px;width:68px;height:68px;object-fit:contain;opacity:0.88;transform:rotate(-8deg);"/>` : ''}</div></div>
   <div style="padding:14px;border-right:1px solid #e0e0e0;"><div style="font-size:11px;color:#999;margin-bottom:10px;">Date</div><div style="font-size:13px;">${qdStr}</div></div>
-  <div style="padding:14px;border-right:1px solid #e0e0e0;"><div style="font-size:11px;color:#999;margin-bottom:10px;">Client Info</div><div style="font-size:13px;font-weight:600;">${clientName}</div></div>
+  <div style="padding:14px;border-right:1px solid #e0e0e0;"><div style="font-size:11px;color:#999;margin-bottom:10px;">Client Info</div><div style="font-size:13px;font-weight:600;">${esc(clientName)}</div></div>
   <div style="padding:14px 0 14px 16px;"><div style="font-size:11px;color:#999;margin-bottom:4px;">최종 제안가 (VAT 포함)</div><div style="font-size:10px;color:#999;margin-bottom:10px;">( 만원 이하 절사${dcNote} )</div><div style="font-size:38px;font-weight:700;letter-spacing:-1px;line-height:1.1;">${Number(finalAmount).toLocaleString('ko-KR')}</div></div>
 </div>
 <div style="border-top:1px solid #e0e0e0;"></div>
-<div style="margin-top:28px;margin-bottom:24px;font-size:20px;font-weight:600;">${meta.project_title}</div>
+<div style="margin-top:28px;margin-bottom:24px;font-size:20px;font-weight:600;">${esc(meta.project_title)}</div>
 <table style="width:100%;border-collapse:collapse;">
 <thead><tr style="border-top:1.5px solid #1a1a1a;border-bottom:1.5px solid #1a1a1a;">
   <th style="width:90px;padding:9px 8px 9px 0;text-align:left;font-size:13px;font-weight:700;"></th>
@@ -1147,6 +1111,7 @@ ${meta.memo && meta.memo.trim() ? `<div style="margin-top:18px;font-size:12px;co
 
   const handlePrint = () => {
     const win = window.open('', '_blank', 'width=900,height=800')
+    if (!win) { alert('팝업이 차단되었습니다. 브라우저 팝업 허용 후 다시 시도해주세요.'); return }
     win.document.write(html)
     win.document.close()
     setTimeout(() => win.print(), 500)
@@ -1942,9 +1907,14 @@ function SendQuoteEmailModal({ quote, clientName, clientEmail, subTotal, finalAm
     if (!to) return setError('받는 사람 이메일을 입력해주세요.')
     setSending(true); setError('')
     try {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) throw new Error('로그인이 필요합니다')
       const res = await fetch('/api/send-quote', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
         body: JSON.stringify({
           to, subject, message,
           quote: {

@@ -1,15 +1,29 @@
+import { createClient } from '@supabase/supabase-js'
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end()
+
+  // 인증: Supabase 세션 JWT 검증 (무인증 오픈 릴레이 방지)
+  const authHeader = req.headers.authorization || ''
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+  if (!token) return res.status(401).json({ error: '인증 필요' })
+  const sb = createClient(
+    process.env.VITE_SUPABASE_URL,
+    process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY,
+  )
+  const { data: { user }, error: authError } = await sb.auth.getUser(token)
+  if (authError || !user) return res.status(401).json({ error: '유효하지 않은 세션' })
 
   const { to, subject, message, quote } = req.body
   if (!to || !quote) return res.status(400).json({ error: '필수 값 누락' })
 
   const fmt = (n) => Number(n).toLocaleString('ko-KR')
+  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
 
   const itemRows = (quote.items || []).map(it => `
     <tr>
-      <td style="padding:8px 12px;border-bottom:1px solid #f1f5f9;color:#374151;">${it.cat}</td>
-      <td style="padding:8px 12px;border-bottom:1px solid #f1f5f9;font-weight:500;color:#0f172a;">${it.name}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #f1f5f9;color:#374151;">${esc(it.cat)}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #f1f5f9;font-weight:500;color:#0f172a;">${esc(it.name)}</td>
       <td style="padding:8px 12px;border-bottom:1px solid #f1f5f9;text-align:center;color:#64748b;">${it.day}일</td>
       <td style="padding:8px 12px;border-bottom:1px solid #f1f5f9;text-align:center;color:#64748b;">${it.qty}</td>
       <td style="padding:8px 12px;border-bottom:1px solid #f1f5f9;text-align:right;color:#64748b;">${fmt(it.price)}원</td>
@@ -36,11 +50,11 @@ export default async function handler(req, res) {
 </head>
 <body>
 <div class="wrap">
-  <div class="msg">${message || ''}</div>
+  <div class="msg">${esc(message || '')}</div>
   <div class="card">
     <div class="card-header">
       <h2>견적서</h2>
-      <p>${quote.project_title} · ${quote.client_name} · ${quote.quote_date}</p>
+      <p>${esc(quote.project_title)} · ${esc(quote.client_name)} · ${esc(quote.quote_date)}</p>
     </div>
     <table>
       <thead>
@@ -84,7 +98,7 @@ export default async function handler(req, res) {
       from: 'LUNAMO <onboarding@resend.dev>',
       to: [to],
       reply_to: process.env.REPLY_TO_EMAIL,
-      subject: subject || `[LUNAMO] 견적서 - ${quote.project_title}`,
+      subject: (subject || `[LUNAMO] 견적서 - ${quote.project_title}`).replace(/[\r\n]/g, ' '),
       html,
     }),
   })

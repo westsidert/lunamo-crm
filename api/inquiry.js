@@ -37,13 +37,24 @@ const ALL_ITEMS = [
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end()
 
+  // 웹훅 시크릿 검증 (Fluent Forms 웹훅 URL에 ?secret=... 추가 또는 x-webhook-secret 헤더)
+  const secret = process.env.INQUIRY_WEBHOOK_SECRET
+  if (!secret) {
+    console.error('[inquiry] INQUIRY_WEBHOOK_SECRET 미설정 — 요청 거부')
+    return res.status(503).json({ error: '서버 설정 오류' })
+  }
+  const provided = req.headers['x-webhook-secret'] || req.query?.secret
+  if (provided !== secret) {
+    return res.status(401).json({ error: '인증 실패' })
+  }
+
   const body = req.body || {}
 
   if (Object.keys(body).length === 0) {
     return res.status(400).json({ error: '필수 필드 누락' })
   }
 
-  // 즉시 200 응답 — waitUntil로 백그라운드 처리 보장
+  // 인증·검증 통과 후 200 응답 — waitUntil로 백그라운드 처리 보장
   res.status(200).json({ received: true })
   waitUntil(processInquiry(body).catch(e => console.error('[inquiry] 처리 실패:', e)))
 }
@@ -278,11 +289,12 @@ ${itemsDesc}
 
   // 4. 알림 이메일 발송
   const fmt = (n) => Number(n).toLocaleString('ko-KR')
+  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
 
   const itemRows = (aiData.items || []).map(it => `
     <tr>
-      <td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;color:#374151;">${it.cat}</td>
-      <td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;font-weight:500;">${it.name}</td>
+      <td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;color:#374151;">${esc(it.cat)}</td>
+      <td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;font-weight:500;">${esc(it.name)}</td>
       <td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;text-align:center;">${it.day}일</td>
       <td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;text-align:center;">${it.qty}</td>
       <td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;text-align:right;">${fmt(it.price)}원</td>
@@ -317,16 +329,16 @@ ${itemsDesc}
   </div>
   <div class="body">
     <div class="info">
-      <strong>업체명:</strong> ${company || '미지정'}<br>
-      <strong>담당자:</strong> ${contact || '미지정'} / ${phone || '-'}<br>
-      <strong>이메일:</strong> ${email || '-'}<br>
-      <strong>문의분야:</strong> ${field || '미지정'}<br>
-      ${refLink ? `<strong>레퍼런스:</strong> <a href="${refLink}">${refLink}</a><br>` : ''}
+      <strong>업체명:</strong> ${esc(company || '미지정')}<br>
+      <strong>담당자:</strong> ${esc(contact || '미지정')} / ${esc(phone || '-')}<br>
+      <strong>이메일:</strong> ${esc(email || '-')}<br>
+      <strong>문의분야:</strong> ${esc(field || '미지정')}<br>
+      ${refLink ? `<strong>레퍼런스:</strong> <a href="${esc(refLink)}">${esc(refLink)}</a><br>` : ''}
       <strong>문의내용:</strong><br>
-      <span style="color:#374151;white-space:pre-line;">${content || '없음'}</span>
+      <span style="color:#374151;white-space:pre-line;">${esc(content || '없음')}</span>
     </div>
 
-    <p style="font-size:13px;font-weight:600;color:#0f172a;margin-bottom:12px;">📊 AI 가견적 — ${aiData.project_title}</p>
+    <p style="font-size:13px;font-weight:600;color:#0f172a;margin-bottom:12px;">📊 AI 가견적 — ${esc(aiData.project_title)}</p>
     <table>
       <thead>
         <tr><th>구분</th><th>항목</th><th>일수</th><th>수량</th><th>단가</th><th>금액</th></tr>
@@ -335,7 +347,7 @@ ${itemsDesc}
     </table>
     <div class="total">공급가액: ${fmt(subTotal)}원 → 부가세 포함 ${fmt(Math.round(subTotal * 1.1))}원</div>
 
-    ${aiData.note ? `<div class="note">💡 ${aiData.note}</div>` : ''}
+    ${aiData.note ? `<div class="note">💡 ${esc(aiData.note)}</div>` : ''}
 
     <div class="cta">
       <a href="${process.env.VITE_APP_URL || 'https://lunamo-crm.vercel.app'}">CRM에서 견적서 수정하기 →</a>
@@ -354,7 +366,7 @@ ${itemsDesc}
     body: JSON.stringify({
       from: 'LUNAMO CRM <onboarding@resend.dev>',
       to: [process.env.REPORT_EMAIL],
-      subject: `[LUNAMO] 새 의뢰 — ${company || '신규'} (${field || '문의'})`,
+      subject: `[LUNAMO] 새 의뢰 — ${company || '신규'} (${field || '문의'})`.replace(/[\r\n]/g, ' '),
       html,
     }),
   })

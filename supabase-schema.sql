@@ -48,10 +48,10 @@ alter table clients enable row level security;
 alter table projects enable row level security;
 alter table transactions enable row level security;
 
--- 모든 접근 허용 정책 (개발용 - 운영 시 인증 추가 권장)
-create policy "Allow all" on clients for all using (true) with check (true);
-create policy "Allow all" on projects for all using (true) with check (true);
-create policy "Allow all" on transactions for all using (true) with check (true);
+-- 인증된 사용자만 접근 (anon 키 노출 대비)
+create policy "authenticated only" on clients for all using (auth.role() = 'authenticated');
+create policy "authenticated only" on projects for all using (auth.role() = 'authenticated');
+create policy "authenticated only" on transactions for all using (auth.role() = 'authenticated');
 
 -- 인덱스
 create index on transactions(transaction_date desc);
@@ -95,8 +95,8 @@ create table quote_items (
 alter table quotes enable row level security;
 alter table quote_items enable row level security;
 
-create policy "Allow all" on quotes for all using (true) with check (true);
-create policy "Allow all" on quote_items for all using (true) with check (true);
+create policy "authenticated only" on quotes for all using (auth.role() = 'authenticated');
+create policy "authenticated only" on quote_items for all using (auth.role() = 'authenticated');
 
 create index on quotes(quote_date desc);
 create index on quotes(client_id);
