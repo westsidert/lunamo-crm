@@ -2,11 +2,11 @@ import { useState, useEffect } from 'react'
 import { getTransactions, createTransaction, createTransactions, updateTransaction, deleteTransaction, getClients, getProjects } from '../lib/api'
 import { formatKRW, formatDate, calcVat } from '../lib/utils'
 import Modal, { FormRow, Input, Select, Textarea, FormActions } from '../components/Modal'
-import { getCrew } from '../lib/crew'
+import { getCrew, createCrew } from '../lib/crew'
 
 const EMPTY = {
   type: '매출', transaction_date: new Date().toISOString().slice(0, 10),
-  item: '', client_id: '', project_id: '',
+  item: '', client_id: '', project_id: '', crew_id: '',
   supply_amount: '', vat: '', withholding_tax: '',
   invoice_issued: false, payment_status: '미수금', memo: '',
 }
@@ -23,6 +23,7 @@ export default function Transactions() {
   const [transactions, setTransactions] = useState([])
   const [clients, setClients] = useState([])
   const [projects, setProjects] = useState([])
+  const [crew, setCrew] = useState([])
   const [loading, setLoading] = useState(true)
   const [modal, setModal] = useState(null)
   const [filter, setFilter] = useState({ type: '', client_id: '', month: '' })
@@ -32,10 +33,11 @@ export default function Transactions() {
   const loadAll = async () => {
     setLoading(true)
     try {
-      const [tx, cl, pr] = await Promise.all([getTransactions(), getClients(), getProjects()])
+      const [tx, cl, pr, cr] = await Promise.all([getTransactions(), getClients(), getProjects(), getCrew()])
       setTransactions(tx)
       setClients(cl)
       setProjects(pr)
+      setCrew(cr)
     } catch (e) { console.error(e) }
     setLoading(false)
   }
@@ -132,7 +134,7 @@ export default function Transactions() {
                     </span>
                   </td>
                   <td style={tdStyle}>{formatDate(tx.transaction_date)}</td>
-                  <td style={tdStyle}>{tx.clients?.name || '-'}</td>
+                  <td style={tdStyle}>{tx.clients?.name || tx.crew?.name || '-'}</td>
                   <td style={tdStyle}>{tx.projects?.name || '-'}</td>
                   <td style={{ ...tdStyle, maxWidth: 160 }}>{tx.item}</td>
                   <td style={{ ...tdStyle, textAlign: 'right' }}>{formatKRW(tx.supply_amount)}</td>
@@ -164,7 +166,7 @@ export default function Transactions() {
                     <div style={{ display: 'flex', gap: 4 }}>
                       <button onClick={() => setModal(tx)} style={btnSmall}>수정</button>
                       <button onClick={() => {
-                        const { id, clients, projects: _p, total_amount, ...rest } = tx
+                        const { id, clients, projects: _p, crew: _c, total_amount, ...rest } = tx
                         setModal(rest)
                       }} style={{ ...btnSmall, color: '#0891b2', borderColor: '#a5f3fc' }}>복제</button>
                       <button onClick={() => handleDelete(tx.id)} style={{ ...btnSmall, color: '#ef4444' }}>삭제</button>
@@ -180,6 +182,8 @@ export default function Transactions() {
       {modal === 'labor-batch' && (
         <LaborBatchModal
           projects={projects}
+          crew={crew}
+          onCrewCreated={(members) => setCrew(prev => [...prev, ...members])}
           onClose={() => setModal(null)}
           onSave={handleBatchSave}
         />
@@ -190,6 +194,7 @@ export default function Transactions() {
           tx={modal === 'create' ? EMPTY : modal}
           clients={clients}
           projects={projects}
+          crew={crew}
           onClose={() => setModal(null)}
           onSave={handleSave}
         />
@@ -221,7 +226,7 @@ export default function Transactions() {
   }
 }
 
-function TransactionModal({ tx, clients, projects, onClose, onSave }) {
+function TransactionModal({ tx, clients, projects, crew, onClose, onSave }) {
   const [form, setForm] = useState({ ...tx, withholding_tax: tx.withholding_tax ?? '' })
   const [loading, setLoading] = useState(false)
   const [inputMode, setInputMode] = useState('supply') // 'supply' | 'total'
@@ -273,6 +278,7 @@ function TransactionModal({ tx, clients, projects, onClose, onSave }) {
         item: form.item,
         client_id: form.client_id || null,
         project_id: form.project_id || null,
+        crew_id: isLabor ? (form.crew_id || null) : null,
         supply_amount: Number(form.supply_amount) || 0,
         vat: isLabor ? 0 : (Number(form.vat) || 0),
         withholding_tax: isLabor ? (Number(form.withholding_tax) || 0) : 0,
@@ -317,12 +323,21 @@ function TransactionModal({ tx, clients, projects, onClose, onSave }) {
           <FormRow label="날짜" required>
             <Input type="date" value={form.transaction_date} onChange={e => set('transaction_date', e.target.value)} required />
           </FormRow>
-          <FormRow label={isLabor ? '프리랜서 / 거래처' : '거래처'}>
-            <Select value={form.client_id} onChange={e => set('client_id', e.target.value)}>
-              <option value="">선택 안 함</option>
-              {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </Select>
-          </FormRow>
+          {isLabor ? (
+            <FormRow label="인력 (프리랜서)">
+              <Select value={form.crew_id || ''} onChange={e => set('crew_id', e.target.value)}>
+                <option value="">선택 안 함</option>
+                {crew.map(c => <option key={c.id} value={c.id}>{c.name}{c.role ? ` (${c.role})` : ''}</option>)}
+              </Select>
+            </FormRow>
+          ) : (
+            <FormRow label="거래처">
+              <Select value={form.client_id} onChange={e => set('client_id', e.target.value)}>
+                <option value="">선택 안 함</option>
+                {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </Select>
+            </FormRow>
+          )}
         </div>
 
         <FormRow label={isLabor ? '작업 내용' : '항목'} required>
@@ -449,15 +464,15 @@ function TransactionModal({ tx, clients, projects, onClose, onSave }) {
 }
 
 // ── 외주인건비 일괄입력 모달 ─────────────────────────────────────────────────
-function LaborBatchModal({ projects, onClose, onSave }) {
+function LaborBatchModal({ projects, crew, onCrewCreated, onClose, onSave }) {
   const today = new Date().toISOString().slice(0, 10)
   const [date, setDate] = useState(today)
   const [projectId, setProjectId] = useState('')
   const [paymentStatus, setPaymentStatus] = useState('지급완료')
   const [rows, setRows] = useState([mkRow()])
   const [loading, setLoading] = useState(false)
-  const [crew, setCrew] = useState([])
-  useEffect(() => { getCrew().then(setCrew).catch(console.error) }, [])
+
+  const findCrewByName = (name) => crew.find(c => c.name.trim() === name.trim())
 
   function mkRow() {
     return { _id: Date.now() + Math.random(), name: '', item: '', amount: '', withholding: '', memo: '' }
@@ -485,19 +500,34 @@ function LaborBatchModal({ projects, onClose, onSave }) {
     if (validRows.length === 0) { alert('최소 1명의 이름과 지급액을 입력해주세요.'); return }
     setLoading(true)
     try {
-      const txList = validRows.map(r => ({
-        type: '외주인건비',
-        transaction_date: date,
-        item: r.name + (r.item ? ` (${r.item})` : ''),
-        client_id: null,
-        project_id: projectId || null,
-        supply_amount: Number(r.amount),
-        vat: 0,
-        withholding_tax: Number(r.withholding) || 0,
-        invoice_issued: false,
-        payment_status: paymentStatus,
-        memo: r.memo || '',
-      }))
+      // 이름으로 인력 매칭, 미등록 이름은 인력에 자동 등록 후 crew_id 연결 (원천세 신고용)
+      const createdCache = new Map()
+      const resolveCrewId = async (rawName) => {
+        const name = rawName.trim()
+        const existing = findCrewByName(name) || createdCache.get(name)
+        if (existing) return existing.id
+        const created = await createCrew({ name })
+        createdCache.set(name, created)
+        return created.id
+      }
+      const txList = []
+      for (const r of validRows) {
+        txList.push({
+          type: '외주인건비',
+          transaction_date: date,
+          item: r.name + (r.item ? ` (${r.item})` : ''),
+          client_id: null,
+          crew_id: await resolveCrewId(r.name),
+          project_id: projectId || null,
+          supply_amount: Number(r.amount),
+          vat: 0,
+          withholding_tax: Number(r.withholding) || 0,
+          invoice_issued: false,
+          payment_status: paymentStatus,
+          memo: r.memo || '',
+        })
+      }
+      if (createdCache.size > 0) onCrewCreated([...createdCache.values()])
       await onSave(txList)
     } catch (err) {
       alert('저장 실패: ' + err.message)
@@ -586,6 +616,11 @@ function LaborBatchModal({ projects, onClose, onSave }) {
                             </option>
                           ))}
                         </datalist>
+                        {row.name.trim() && (
+                          findCrewByName(row.name)
+                            ? <div style={{ fontSize: 10, color: '#16a34a', marginTop: 2 }}>✓ 인력 연결</div>
+                            : <div style={{ fontSize: 10, color: '#d97706', marginTop: 2 }}>신규 - 저장 시 인력 자동 등록</div>
+                        )}
                       </td>
                       <td style={{ ...cellPad, minWidth: 160 }}>
                         <input

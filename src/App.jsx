@@ -12,6 +12,7 @@ import Clients from './pages/Clients'
 import Quotes from './pages/Quotes'
 import Crew from './pages/Crew'
 import FixedExpenses from './pages/FixedExpenses'
+import WithholdingTax from './pages/WithholdingTax'
 
 function App() {
   const [configured] = useState(isConfigured)
@@ -52,12 +53,13 @@ function App() {
 
   const renderPage = () => {
     switch (page) {
-      case 'dashboard': return <Dashboard />
+      case 'dashboard': return <Dashboard onNavigate={setPage} />
       case 'transactions': return <Transactions />
       case 'projects': return <Projects />
       case 'clients': return <Clients />
       case 'quotes': return <Quotes />
       case 'crew': return <Crew />
+      case 'withholding': return <WithholdingTax />
       case 'fixed': return <FixedExpenses />
       default: return <Dashboard />
     }

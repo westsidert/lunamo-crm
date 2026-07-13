@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { getCrew, createCrew, updateCrew, deleteCrew } from '../lib/crew'
 
-const EMPTY = { name: '', role: '', phone: '', rrn: '', memo: '' }
+const EMPTY = { name: '', role: '', phone: '', rrn: '', memo: '', biz_type_code: '940909' }
 
 const formatRrn = (raw) => {
   const digits = raw.replace(/\D/g, '').slice(0, 13)
@@ -165,6 +165,7 @@ function CrewModal({ member, onClose, onSave }) {
             ['이름 *', 'name', 'text', '예) 홍길동'],
             ['역할/분야', 'role', 'text', '예) 편집, 촬영, 작가'],
             ['연락처', 'phone', 'tel', '010-0000-0000'],
+            ['업종코드 (간이지급명세서)', 'biz_type_code', 'text', '기본 940909 (기타자영업)'],
             ['메모', 'memo', 'text', '계좌번호 등'],
           ].map(([label, key, type, placeholder]) => (
             <div key={key} style={{ marginBottom: 14 }}>

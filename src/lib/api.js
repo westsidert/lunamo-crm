@@ -104,7 +104,7 @@ export const createProjectFromQuote = async (quote) => {
 export const getTransactions = async (filters = {}) => {
   let query = supabase
     .from('transactions')
-    .select('*, clients(name), projects(name)')
+    .select('*, clients(name), projects(name), crew(name)')
     .order('transaction_date', { ascending: false })
 
   if (filters.type) query = query.eq('type', filters.type)
@@ -122,7 +122,7 @@ export const createTransaction = async (tx) => {
   const { data, error } = await supabase
     .from('transactions')
     .insert(tx)
-    .select('*, clients(name), projects(name)')
+    .select('*, clients(name), projects(name), crew(name)')
     .single()
   if (error) throw error
   return data
@@ -131,7 +131,7 @@ export const createTransaction = async (tx) => {
 export const updateTransaction = async (id, tx) => {
   const { data, error } = await supabase
     .from('transactions').update(tx).eq('id', id)
-    .select('*, clients(name), projects(name)').single()
+    .select('*, clients(name), projects(name), crew(name)').single()
   if (error) throw error
   return data
 }
@@ -145,7 +145,7 @@ export const createTransactions = async (txList) => {
   const { data, error } = await supabase
     .from('transactions')
     .insert(txList)
-    .select('*, clients(name), projects(name)')
+    .select('*, clients(name), projects(name), crew(name)')
   if (error) throw error
   return data
 }

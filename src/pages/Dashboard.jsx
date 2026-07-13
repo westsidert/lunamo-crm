@@ -5,16 +5,18 @@ import {
 } from 'recharts'
 import { getDashboardStats, getYearlyStats, getUnpaidSales, getRecentTransactions, getFixedExpenses } from '../lib/api'
 import { formatKRW, thisYear, thisMonth, MONTHS } from '../lib/utils'
+import { getLaborTransactions, getTaxFilings, calcIncomeTax, calcLocalTax, filingDeadline, currentFilingPeriod } from '../lib/withholding'
 
 const COLORS = ['#3b82f6','#10b981','#f59e0b','#ef4444','#8b5cf6','#06b6d4','#84cc16','#f97316']
 
 const TYPE_COLOR  = { '매출': '#2563eb', '매입': '#d97706', '외주인건비': '#7c3aed' }
 const TYPE_BG     = { '매출': '#eff6ff', '매입': '#fffbeb', '외주인건비': '#f5f3ff' }
 
-export default function Dashboard() {
+export default function Dashboard({ onNavigate }) {
   const [year, setYear] = useState(thisYear())
   const [month, setMonth] = useState(thisMonth())
   const [exVat, setExVat] = useState(false)
+  const [taxAlert, setTaxAlert] = useState(null)
 
   const [yearRaw, setYearRaw]           = useState([])
   const [prevYearRaw, setPrevYearRaw]   = useState([])
@@ -31,7 +33,29 @@ export default function Dashboard() {
 
   useEffect(() => {
     getFixedExpenses().then(setFixedExpenses).catch(console.error)
+    loadTaxAlert().catch(console.error)
   }, [])
+
+  // 전월 지급분 원천세 신고 현황 (지급이 있고 4단계 미완료일 때만 배너 노출)
+  const loadTaxAlert = async () => {
+    const period = currentFilingPeriod()
+    const [txs, filings] = await Promise.all([getLaborTransactions(period), getTaxFilings()])
+    if (txs.length === 0) return
+    const filing = filings.find(f => f.period === period) || {}
+    const doneCount = ['step_withholding', 'step_statement', 'step_local', 'step_paid'].filter(k => filing[k]).length
+    if (doneCount === 4) return
+    const names = new Set(txs.map(t => t.crew?.name || (t.item || '').split(' (')[0].trim()))
+    const amount = txs.reduce((s, t) => s + Number(t.supply_amount || 0), 0)
+    const incomeTax = txs.reduce((s, t) => s + calcIncomeTax(t.supply_amount), 0)
+    const localTax = txs.reduce((s, t) => s + calcLocalTax(t.supply_amount), 0)
+    const today = new Date(); today.setHours(0, 0, 0, 0)
+    const deadline = filingDeadline(period)
+    setTaxAlert({
+      period, doneCount, people: names.size, amount, incomeTax, localTax,
+      daysLeft: Math.ceil((deadline - today) / 86400000),
+      deadlineText: `${deadline.getMonth() + 1}/${deadline.getDate()}`,
+    })
+  }
 
   useEffect(() => {
     getYearlyStats(year).then(setYearRaw).catch(console.error)
@@ -283,6 +307,55 @@ export default function Dashboard() {
                 </div>
               )
             })}
+          </div>
+        </div>
+      )}
+
+      {/* ── 원천세 신고 리마인더 배너 ─────────────────── */}
+      {taxAlert && (
+        <div style={{
+          marginBottom: 28, borderRadius: 14, overflow: 'hidden',
+          border: `1px solid ${taxAlert.daysLeft < 0 ? '#fecaca' : '#e9d5ff'}`, background: '#fff',
+        }}>
+          <div style={{
+            background: taxAlert.daysLeft < 0 ? 'linear-gradient(135deg, #fef2f2, #fff7ed)' : 'linear-gradient(135deg, #faf5ff, #eff6ff)',
+            borderBottom: `1px solid ${taxAlert.daysLeft < 0 ? '#fecaca' : '#e9d5ff'}`,
+            padding: '14px 20px',
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ fontSize: 16 }}>🧾</span>
+              <span style={{ fontSize: 14, fontWeight: 700, color: taxAlert.daysLeft < 0 ? '#dc2626' : '#7c3aed' }}>
+                {parseInt(taxAlert.period.split('-')[1])}월 지급분 원천세 신고
+              </span>
+              <span style={{
+                background: taxAlert.daysLeft < 0 ? '#dc2626' : '#7c3aed', color: '#fff', borderRadius: 20,
+                fontSize: 11, fontWeight: 700, padding: '2px 8px',
+              }}>
+                {taxAlert.daysLeft < 0 ? `마감 경과 (${taxAlert.deadlineText})` : `D-${taxAlert.daysLeft} (${taxAlert.deadlineText})`}
+              </span>
+              <span style={{ fontSize: 12, color: '#94a3b8' }}>진행 {taxAlert.doneCount}/4</span>
+            </div>
+            <button onClick={() => onNavigate?.('withholding')} style={{
+              padding: '7px 16px', borderRadius: 8, border: 'none', cursor: 'pointer',
+              background: '#7c3aed', color: '#fff', fontSize: 13, fontWeight: 600,
+            }}>신고 도우미 열기 →</button>
+          </div>
+          <div style={{ display: 'flex', gap: 0, padding: '12px 20px', flexWrap: 'wrap' }}>
+            {[
+              ['인원', `${taxAlert.people}명`],
+              ['총지급금액', formatKRW(taxAlert.amount) + '원'],
+              ['소득세 (3%)', formatKRW(taxAlert.incomeTax) + '원'],
+              ['지방소득세 (0.3%)', formatKRW(taxAlert.localTax) + '원'],
+            ].map(([label, value], i) => (
+              <div key={label} style={{
+                paddingRight: 28, marginRight: 28,
+                borderRight: i < 3 ? '1px solid #f1f5f9' : 'none',
+              }}>
+                <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 3 }}>{label}</div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: '#0f172a' }}>{value}</div>
+              </div>
+            ))}
           </div>
         </div>
       )}

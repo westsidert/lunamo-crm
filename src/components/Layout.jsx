@@ -8,6 +8,7 @@ const NAV_ITEMS = [
   { id: 'projects',     label: '프로젝트', icon: '🎬' },
   { id: 'clients',      label: '거래처',   icon: '🏢' },
   { id: 'crew',         label: '인력',     icon: '👥' },
+  { id: 'withholding',  label: '원천세 신고', icon: '🧾' },
   { id: 'fixed',        label: '고정비',   icon: '🔄' },
 ]
 
