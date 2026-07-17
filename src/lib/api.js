@@ -239,6 +239,32 @@ export const getYearlyStats = async (year) => {
   return data
 }
 
+// ── 경고등 (대시보드 위험 신호) ───────────────────
+export const getAlertsData = async () => {
+  const [labor, invoices, projects, quotes] = await Promise.all([
+    supabase.from('transactions')
+      .select('id, supply_amount, withholding_tax, transaction_date')
+      .eq('type', '외주인건비').eq('payment_status', '미지급'),
+    supabase.from('transactions')
+      .select('id, total_amount, transaction_date')
+      .eq('type', '매출').eq('invoice_issued', false),
+    supabase.from('projects')
+      .select('id, name, end_date')
+      .eq('status', '진행중'),
+    supabase.from('quotes')
+      .select('id, final_amount')
+      .eq('status', '발송완료'),
+  ])
+  const firstError = [labor, invoices, projects, quotes].find(r => r.error)
+  if (firstError) throw firstError.error
+  return {
+    unpaidLabor: labor.data || [],
+    unissuedInvoices: invoices.data || [],
+    activeProjects: projects.data || [],
+    sentQuotes: quotes.data || [],
+  }
+}
+
 // ── 고정비 ────────────────────────────────────────
 export const getFixedExpenses = async () => {
   const { data, error } = await supabase

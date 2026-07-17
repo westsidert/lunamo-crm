@@ -3,6 +3,10 @@ import { getTransactions, createTransaction, createTransactions, updateTransacti
 import { formatKRW, formatDate, calcVat } from '../lib/utils'
 import Modal, { FormRow, Input, Select, Textarea, FormActions } from '../components/Modal'
 import { getCrew, createCrew } from '../lib/crew'
+import PeriodSelect from '../components/PeriodSelect'
+import { valueToRange } from '../lib/period'
+import { downloadCsvRows } from '../lib/csv'
+import useIsMobile from '../lib/useIsMobile'
 
 const EMPTY = {
   type: '매출', transaction_date: new Date().toISOString().slice(0, 10),
@@ -20,13 +24,14 @@ const TYPE_STYLE = {
 const calcWithholding = (amount) => Math.round((Number(amount) || 0) * 0.033)
 
 export default function Transactions() {
+  const isMobile = useIsMobile()
   const [transactions, setTransactions] = useState([])
   const [clients, setClients] = useState([])
   const [projects, setProjects] = useState([])
   const [crew, setCrew] = useState([])
   const [loading, setLoading] = useState(true)
   const [modal, setModal] = useState(null)
-  const [filter, setFilter] = useState({ type: '', client_id: '', month: '' })
+  const [filter, setFilter] = useState({ type: '', client_id: '', period: '' })
 
   useEffect(() => { loadAll() }, [])
 
@@ -46,12 +51,15 @@ export default function Transactions() {
   const monthOptions = [...new Set(transactions.map(tx => tx.transaction_date?.slice(0, 7)).filter(Boolean))]
     .sort().reverse()
 
-  const filtered = transactions.filter(tx => {
-    if (filter.type && tx.type !== filter.type) return false
+  const range = valueToRange(filter.period)
+  // 유형 제외 공통 필터 (유형 칩의 건수 계산용)
+  const baseFiltered = transactions.filter(tx => {
     if (filter.client_id && tx.client_id !== filter.client_id) return false
-    if (filter.month && !tx.transaction_date?.startsWith(filter.month)) return false
+    if (range && (!tx.transaction_date || tx.transaction_date < range.from || tx.transaction_date > range.to)) return false
     return true
   })
+  const filtered = baseFiltered.filter(tx => !filter.type || tx.type === filter.type)
+  const typeCount = (t) => baseFiltered.filter(tx => tx.type === t).length
 
   const totalSales    = filtered.filter(t => t.type === '매출').reduce((s, t) => s + Number(t.total_amount), 0)
   const totalPurchase = filtered.filter(t => t.type === '매입').reduce((s, t) => s + Number(t.total_amount), 0)
@@ -59,20 +67,21 @@ export default function Transactions() {
   const profit        = totalSales - totalPurchase - totalLabor
 
   return (
-    <div style={{ padding: '28px 32px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+    <div style={{ padding: isMobile ? '18px 14px' : '28px 32px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24, flexWrap: 'wrap', gap: 10 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0f172a' }}>거래 내역</h1>
           <p style={{ color: '#64748b', marginTop: 4, fontSize: 13 }}>매출 · 매입 · 외주인건비 관리</p>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button onClick={exportCsv} style={{ ...btnPrimary, background: '#fff', color: '#475569', border: '1px solid #e2e8f0' }}>⤓ 엑셀(CSV)</button>
           <button onClick={() => setModal('labor-batch')} style={{ ...btnPrimary, background: '#7c3aed' }}>👥 외주인건비 일괄입력</button>
           <button onClick={() => setModal('create')} style={btnPrimary}>+ 거래 등록</button>
         </div>
       </div>
 
       {/* Summary */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 20 }}>
         <SumCard label="매출 합계"      value={totalSales}    color="#2563eb" />
         <SumCard label="매입 합계"      value={totalPurchase} color="#d97706" />
         <SumCard label="외주인건비 합계" value={totalLabor}    color="#7c3aed" />
@@ -80,29 +89,44 @@ export default function Transactions() {
       </div>
 
       {/* Filter */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
-        <select value={filter.month} onChange={e => setFilter(f => ({ ...f, month: e.target.value }))} style={selStyle}>
-          <option value="">전체 월</option>
-          {monthOptions.map(m => {
-            const [y, mo] = m.split('-')
-            return <option key={m} value={m}>{y}년 {parseInt(mo)}월</option>
-          })}
-        </select>
-        <select value={filter.type} onChange={e => setFilter(f => ({ ...f, type: e.target.value }))} style={selStyle}>
-          <option value="">전체 유형</option>
-          <option>매출</option>
-          <option>매입</option>
-          <option>외주인건비</option>
-        </select>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+        <PeriodSelect
+          value={filter.period}
+          onChange={v => setFilter(f => ({ ...f, period: v }))}
+          monthOptions={monthOptions}
+          style={selStyle}
+        />
         <select value={filter.client_id} onChange={e => setFilter(f => ({ ...f, client_id: e.target.value }))} style={selStyle}>
           <option value="">전체 거래처</option>
           {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
-        {(filter.type || filter.client_id || filter.month) && (
-          <button onClick={() => setFilter({ type: '', client_id: '', month: '' })} style={{ ...selStyle, cursor: 'pointer' }}>
+        {(filter.type || filter.client_id || filter.period) && (
+          <button onClick={() => setFilter({ type: '', client_id: '', period: '' })} style={{ ...selStyle, cursor: 'pointer' }}>
             초기화
           </button>
         )}
+      </div>
+
+      {/* 유형 칩 (건수 포함) */}
+      <div style={{ display: 'flex', gap: 6, marginBottom: 16, flexWrap: 'wrap' }}>
+        {[
+          { key: '', label: '전체', count: baseFiltered.length, color: '#475569', bg: '#f1f5f9' },
+          { key: '매출', label: '매출', count: typeCount('매출'), color: '#2563eb', bg: '#eff6ff' },
+          { key: '매입', label: '매입', count: typeCount('매입'), color: '#d97706', bg: '#fffbeb' },
+          { key: '외주인건비', label: '외주인건비', count: typeCount('외주인건비'), color: '#7c3aed', bg: '#f5f3ff' },
+        ].map(c => {
+          const active = filter.type === c.key
+          return (
+            <button key={c.key || 'all'} onClick={() => setFilter(f => ({ ...f, type: c.key }))} style={{
+              padding: '6px 14px', borderRadius: 20, fontSize: 13, fontWeight: 600, cursor: 'pointer',
+              border: `1.5px solid ${active ? c.color : '#e2e8f0'}`,
+              background: active ? c.bg : '#fff',
+              color: active ? c.color : '#94a3b8',
+            }}>
+              {c.label} <span style={{ fontWeight: 700 }}>{c.count}</span>
+            </button>
+          )
+        })}
       </div>
 
       {/* Table */}
@@ -223,6 +247,24 @@ export default function Transactions() {
     if (!confirm('삭제하시겠습니까?')) return
     await deleteTransaction(id)
     setTransactions(prev => prev.filter(t => t.id !== id))
+  }
+
+  function exportCsv() {
+    const rows = [['유형', '날짜', '거래처/인력', '프로젝트', '항목', '공급가액/지급액', '부가세', '원천세', '합계/실지급액', '상태', '증빙', '메모']]
+    filtered.forEach(tx => {
+      const isLabor = tx.type === '외주인건비'
+      rows.push([
+        tx.type, tx.transaction_date,
+        tx.clients?.name || tx.crew?.name || '',
+        tx.projects?.name || '', tx.item,
+        Number(tx.supply_amount) || 0,
+        isLabor ? 0 : Number(tx.vat) || 0,
+        isLabor ? Number(tx.withholding_tax) || 0 : 0,
+        isLabor ? Number(tx.supply_amount) - Number(tx.withholding_tax || 0) : Number(tx.total_amount) || 0,
+        tx.payment_status || '', tx.invoice_issued ? 'O' : 'X', tx.memo || '',
+      ])
+    })
+    downloadCsvRows(`거래내역_${new Date().toISOString().slice(0, 10)}.csv`, rows)
   }
 }
 

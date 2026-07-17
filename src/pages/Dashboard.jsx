@@ -3,20 +3,31 @@ import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, PieChart, Pie, Cell
 } from 'recharts'
-import { getDashboardStats, getYearlyStats, getUnpaidSales, getRecentTransactions, getFixedExpenses } from '../lib/api'
+import { getDashboardStats, getYearlyStats, getUnpaidSales, getRecentTransactions, getFixedExpenses, getAlertsData } from '../lib/api'
 import { formatKRW, thisYear, thisMonth, MONTHS } from '../lib/utils'
 import { getLaborTransactions, getTaxFilings, calcIncomeTax, calcLocalTax, filingDeadline, currentFilingPeriod } from '../lib/withholding'
+import useIsMobile from '../lib/useIsMobile'
 
 const COLORS = ['#3b82f6','#10b981','#f59e0b','#ef4444','#8b5cf6','#06b6d4','#84cc16','#f97316']
 
 const TYPE_COLOR  = { '매출': '#2563eb', '매입': '#d97706', '외주인건비': '#7c3aed' }
 const TYPE_BG     = { '매출': '#eff6ff', '매입': '#fffbeb', '외주인건비': '#f5f3ff' }
 
+const ALERT_STYLE = {
+  ok:     { bg: '#f8fafc', border: '#e2e8f0', dot: '#22c55e', text: '#94a3b8' },
+  info:   { bg: '#eff6ff', border: '#bfdbfe', dot: '#3b82f6', text: '#2563eb' },
+  warn:   { bg: '#fffbeb', border: '#fde68a', dot: '#f59e0b', text: '#b45309' },
+  danger: { bg: '#fef2f2', border: '#fecaca', dot: '#ef4444', text: '#dc2626' },
+}
+
 export default function Dashboard({ onNavigate }) {
+  const isMobile = useIsMobile()
   const [year, setYear] = useState(thisYear())
   const [month, setMonth] = useState(thisMonth())
   const [exVat, setExVat] = useState(false)
   const [taxAlert, setTaxAlert] = useState(null)
+  const [taxDone, setTaxDone] = useState(false)
+  const [alertsData, setAlertsData] = useState(null)
 
   const [yearRaw, setYearRaw]           = useState([])
   const [prevYearRaw, setPrevYearRaw]   = useState([])
@@ -34,6 +45,7 @@ export default function Dashboard({ onNavigate }) {
   useEffect(() => {
     getFixedExpenses().then(setFixedExpenses).catch(console.error)
     loadTaxAlert().catch(console.error)
+    getAlertsData().then(setAlertsData).catch(console.error)
   }, [])
 
   // 전월 지급분 원천세 신고 현황 (지급이 있고 4단계 미완료일 때만 배너 노출)
@@ -43,7 +55,7 @@ export default function Dashboard({ onNavigate }) {
     if (txs.length === 0) return
     const filing = filings.find(f => f.period === period) || {}
     const doneCount = ['step_withholding', 'step_statement', 'step_local', 'step_paid'].filter(k => filing[k]).length
-    if (doneCount === 4) return
+    if (doneCount === 4) { setTaxDone(true); return }
     const names = new Set(txs.map(t => t.crew?.name || (t.item || '').split(' (')[0].trim()))
     const amount = txs.reduce((s, t) => s + Number(t.supply_amount || 0), 0)
     const incomeTax = txs.reduce((s, t) => s + calcIncomeTax(t.supply_amount), 0)
@@ -204,11 +216,61 @@ export default function Dashboard({ onNavigate }) {
 
   const vatLabel = exVat ? '부가세 제외' : '부가세 포함'
 
+  // ── 경고등 (0이 아니면 할 일) ─────────────────────
+  const alerts = (() => {
+    const today = new Date(); today.setHours(0, 0, 0, 0)
+    const days = (d) => Math.floor((today - new Date(d)) / 86400000)
+    const ad = alertsData
+    const over90 = unpaidTx.filter(t => days(t.transaction_date) >= 90)
+    const over30 = unpaidTx.filter(t => days(t.transaction_date) >= 30)
+    const unpaidLaborNet = (ad?.unpaidLabor || []).reduce((s, t) => s + Number(t.supply_amount) - Number(t.withholding_tax || 0), 0)
+    const overdueP = (ad?.activeProjects || []).filter(p => p.end_date && days(p.end_date) > 0)
+    const soonP = (ad?.activeProjects || []).filter(p => p.end_date && days(p.end_date) <= 0 && days(p.end_date) >= -7)
+    const sentTotal = (ad?.sentQuotes || []).reduce((s, q) => s + Number(q.final_amount || 0), 0)
+    return [
+      {
+        key: 'receivable', label: '미수금 90일+', nav: 'transactions',
+        state: over90.length ? 'danger' : over30.length ? 'warn' : 'ok',
+        text: over90.length
+          ? `${over90.length}건 · ${formatKRW(over90.reduce((s, t) => s + Number(t.total_amount), 0))}원`
+          : over30.length ? `30일+ ${over30.length}건` : '정상',
+      },
+      {
+        key: 'tax', label: '원천세 신고', nav: 'withholding',
+        state: taxAlert ? (taxAlert.daysLeft < 0 ? 'danger' : 'warn') : 'ok',
+        text: taxAlert
+          ? `진행 ${taxAlert.doneCount}/4 · ${taxAlert.daysLeft < 0 ? '마감 경과' : `D-${taxAlert.daysLeft}`}`
+          : taxDone ? '완료' : '해당 없음',
+      },
+      {
+        key: 'labor', label: '미지급 인건비', nav: 'transactions',
+        state: ad?.unpaidLabor?.length ? 'warn' : 'ok',
+        text: ad?.unpaidLabor?.length ? `${ad.unpaidLabor.length}건 · ${formatKRW(unpaidLaborNet)}원` : '정상',
+      },
+      {
+        key: 'invoice', label: '세금계산서 미발행', nav: 'transactions',
+        state: ad?.unissuedInvoices?.length ? 'warn' : 'ok',
+        text: ad?.unissuedInvoices?.length ? `매출 ${ad.unissuedInvoices.length}건` : '정상',
+      },
+      {
+        key: 'projects', label: '프로젝트 마감', nav: 'projects',
+        state: overdueP.length ? 'danger' : soonP.length ? 'warn' : 'ok',
+        text: overdueP.length ? `지연 ${overdueP.length}건` : soonP.length ? `7일 내 ${soonP.length}건` : '정상',
+      },
+      {
+        key: 'quotes', label: '발송 견적 대기', nav: 'quotes',
+        state: ad?.sentQuotes?.length ? 'info' : 'ok',
+        text: ad?.sentQuotes?.length ? `${ad.sentQuotes.length}건 · ${formatKRW(sentTotal)}원` : '없음',
+      },
+    ]
+  })()
+  const alertCount = alerts.filter(a => a.state === 'warn' || a.state === 'danger').length
+
   return (
-    <div style={{ padding: '28px 32px', maxWidth: 1400, width: '100%' }}>
+    <div style={{ padding: isMobile ? '18px 14px' : '28px 32px', maxWidth: 1400, width: '100%' }}>
 
       {/* ── 헤더 ────────────────────────────────────── */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24, flexWrap: 'wrap', gap: 10 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0f172a' }}>대시보드</h1>
           <p style={{ color: '#64748b', marginTop: 4, fontSize: 13 }}>루나모 영상 프로덕션 현황</p>
@@ -229,10 +291,47 @@ export default function Dashboard({ onNavigate }) {
         </div>
       </div>
 
+      {/* ── 경고등 ───────────────────────────────────── */}
+      <div style={{
+        marginBottom: 28, background: '#fff', borderRadius: 14,
+        border: '1px solid #e2e8f0', padding: '16px 18px',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: '#0f172a' }}>🚦 경고등</span>
+          {alertCount > 0 ? (
+            <span style={{ background: '#fef2f2', color: '#dc2626', borderRadius: 20, fontSize: 11, fontWeight: 700, padding: '2px 8px' }}>
+              주의 {alertCount}건
+            </span>
+          ) : (
+            <span style={{ background: '#f0fdf4', color: '#16a34a', borderRadius: 20, fontSize: 11, fontWeight: 700, padding: '2px 8px' }}>
+              모두 정상
+            </span>
+          )}
+          <span style={{ fontSize: 11, color: '#cbd5e1' }}>0이 아니면 할 일입니다 · 누르면 이동</span>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
+          {alerts.map(a => {
+            const c = ALERT_STYLE[a.state]
+            return (
+              <button key={a.key} onClick={() => onNavigate?.(a.nav)} style={{
+                textAlign: 'left', cursor: 'pointer', borderRadius: 10, padding: '10px 12px',
+                background: c.bg, border: `1px solid ${c.border}`,
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: c.dot, flexShrink: 0 }} />
+                  <span style={{ fontSize: 11, color: '#64748b', fontWeight: 600, whiteSpace: 'nowrap' }}>{a.label}</span>
+                </div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: c.text }}>{a.text}</div>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
       {/* ── 연간 현황 KPI ────────────────────────────── */}
       <div style={{ marginBottom: 28 }}>
         <SectionLabel title={`📊 ${year}년 연간 현황`} badge={vatLabel} />
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(140px, 1fr))', gap: 16 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: isMobile ? 10 : 16 }}>
           <KpiCard label="연 매출" value={formatKRW(aSales)} sub={`${aSalesCnt}건`} color="#2563eb" large
             delta={aSales - pyaSales} prevLabel={`${year-1}년`} prevValue={pyaSales} />
           <KpiCard label="연 매입" value={formatKRW(aPurchase)} sub={`${aPurchaseCnt}건`} color="#d97706" large
@@ -369,7 +468,7 @@ export default function Dashboard({ onNavigate }) {
           </select>
           <span style={badgeStyle}>{vatLabel}</span>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(120px, 1fr))', gap: 16 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: isMobile ? 10 : 16 }}>
           <KpiCard label={`${month}월 매출`} value={formatKRW(mSales)} sub={`${mSalesCnt}건`} color="#2563eb"
             delta={mSales - pSales} prevLabel={`${prevMonth}월`} prevValue={pSales} />
           <KpiCard label={`${month}월 매입`} value={formatKRW(mPurchase)} sub={`${mPurchaseCnt}건`} color="#d97706"
@@ -444,7 +543,7 @@ export default function Dashboard({ onNavigate }) {
       )}
 
       {/* ── 차트 Row ─────────────────────────────────── */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(300px, 380px)', gap: 20, marginBottom: 20 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1fr) minmax(300px, 380px)', gap: 20, marginBottom: 20 }}>
         {/* 월별 추이 */}
         <div style={cardStyle}>
           <h3 style={cardTitle}>
@@ -575,6 +674,43 @@ export default function Dashboard({ onNavigate }) {
             </tbody>
           </table>
         )}
+      </div>
+
+      {/* ── 모듈 현황 (누르면 이동) ───────────────────── */}
+      <div style={{ marginTop: 20 }}>
+        <SectionLabel title="🗂 바로가기 현황" />
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: isMobile ? 10 : 16 }}>
+          {[
+            {
+              nav: 'quotes', icon: '📋', label: '견적서',
+              value: alertsData?.sentQuotes?.length ? `발송 ${alertsData.sentQuotes.length}건 대기` : '대기 없음',
+              color: '#2563eb',
+            },
+            {
+              nav: 'projects', icon: '🎬', label: '프로젝트',
+              value: `진행중 ${alertsData?.activeProjects?.length ?? 0}건`,
+              color: '#0891b2',
+            },
+            {
+              nav: 'withholding', icon: '🧾', label: '원천세 신고',
+              value: taxAlert ? `진행 ${taxAlert.doneCount}/4` : taxDone ? '이번 달 완료' : '해당 없음',
+              color: '#7c3aed',
+            },
+            {
+              nav: 'fixed', icon: '🔄', label: '고정비',
+              value: `월 ${formatKRW(fixedTotal)}원`,
+              color: '#d97706',
+            },
+          ].map(m => (
+            <button key={m.nav} onClick={() => onNavigate?.(m.nav)} style={{
+              textAlign: 'left', cursor: 'pointer', background: '#fff',
+              border: '1px solid #e2e8f0', borderRadius: 12, padding: '14px 16px',
+            }}>
+              <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 6 }}>{m.icon} {m.label}</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: m.color }}>{m.value} →</div>
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   )

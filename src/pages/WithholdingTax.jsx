@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { getCrew } from '../lib/crew'
 import { formatKRW } from '../lib/utils'
+import useIsMobile from '../lib/useIsMobile'
 import {
   calcIncomeTax, calcLocalTax,
   getLaborTransactions, linkTransactionCrew, getTaxFilings, upsertTaxFiling,
@@ -41,6 +42,7 @@ const maskRrn = (rrn) => {
 const STEP_KEYS = ['step_withholding', 'step_statement', 'step_local', 'step_paid']
 
 export default function WithholdingTax() {
+  const isMobile = useIsMobile()
   const [allTx, setAllTx] = useState([])
   const [crew, setCrew] = useState([])
   const [filings, setFilings] = useState([])
@@ -235,7 +237,7 @@ ${people.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.crew?.rrn || '미등�
   }
 
   return (
-    <div style={{ padding: '28px 32px', maxWidth: 1100 }}>
+    <div style={{ padding: isMobile ? '18px 14px' : '28px 32px', maxWidth: 1100 }}>
       {/* 헤더 */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
         <div>
@@ -348,7 +350,7 @@ ${people.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.crew?.rrn || '미등�
               '이후 화면은 체크 없이 저장 후 다음 → 금액 확인 → 신고서 제출 → 소득자료 제출',
             ]}
           >
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
               <BigValue label="인원" value={totals.count} suffix="명" copyValue={totals.count} />
               <BigValue label="총지급금액 (3.3% 공제 전)" value={formatKRW(totals.amount)} suffix="원" copyValue={totals.amount} />
               <BigValue label="소득세 등 (3%)" value={formatKRW(totals.incomeTax)} suffix="원" copyValue={totals.incomeTax} highlight />
@@ -457,7 +459,7 @@ ${people.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.crew?.rrn || '미등�
               '가감조정 없으면 다음 → 다음 → 금액 확인 후 제출',
             ]}
           >
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
               <BigValue label="인원" value={totals.count} suffix="명" copyValue={totals.count} />
               <BigValue label="과세표준 (소득세 3% 금액)" value={formatKRW(totals.incomeTax)} suffix="원" copyValue={totals.incomeTax} highlight />
               <BigValue label="특별징수세액 (0.3%, 자동계산 대조용)" value={formatKRW(totals.localTax)} suffix="원" copyValue={totals.localTax} />
@@ -476,7 +478,7 @@ ${people.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.crew?.rrn || '미등�
               '지방소득세: 위택스에서 바로 납부하거나, 은행 앱 공과금 → 지방세 납부에서 조회 후 납부',
             ]}
           >
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
               <BigValue label="원천세 납부액 (소득세 3%)" value={formatKRW(totals.incomeTax)} suffix="원" copyValue={totals.incomeTax} />
               <BigValue label="지방소득세 납부액 (0.3%)" value={formatKRW(totals.localTax)} suffix="원" copyValue={totals.localTax} />
             </div>

@@ -3,6 +3,7 @@ import { getQuotes, createQuote, updateQuote, deleteQuote, getClients, createPro
 import { formatKRW } from '../lib/utils'
 import { analyzeQuoteRequest, matchClient, getLogo, getStamp, setLogo, setStamp } from '../lib/ai'
 import { supabase } from '../lib/supabase'
+import { downloadCsvRows } from '../lib/csv'
 
 // ── 전체 항목 정의 (엑셀 산출 양식 기반) ─────────────────────────────────
 const ALL_ITEMS = [
@@ -235,7 +236,21 @@ export default function Quotes() {
           <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0f172a' }}>견적서</h1>
           <p style={{ color: '#64748b', marginTop: 4, fontSize: 13 }}>견적서 작성 · 관리 · PDF 출력</p>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button onClick={() => {
+            const rows = [['날짜', '거래처', '프로젝트명', '공급가액', '부가세', '최종 금액', '상태', '메모']]
+            quotes.forEach(q => rows.push([
+              q.quote_date,
+              q.clients?.name || q.client_name_override || '',
+              q.project_title,
+              Number(q.sub_total) || 0,
+              Number(q.vat_amount) || 0,
+              Number(q.final_amount) || 0,
+              q.status || '',
+              q.memo || '',
+            ]))
+            downloadCsvRows(`견적서목록_${new Date().toISOString().slice(0, 10)}.csv`, rows)
+          }} style={{ ...btnPrimary, background: '#fff', color: '#475569', border: '1px solid #e2e8f0' }}>⤓ 엑셀(CSV)</button>
           <button onClick={() => setShowImgSettings(true)} style={{ ...btnPrimary, background: '#64748b' }}>🖼 로고/도장</button>
           <button onClick={openCreate} style={btnPrimary}>+ 견적서 작성</button>
         </div>
