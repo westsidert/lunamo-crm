@@ -626,7 +626,7 @@ function QuoteWizard({ initial, clients, pastQuotes = [], onClose, onSave }) {
                   {aiLoading ? (
                     <>
                       <span style={{ display: 'inline-block', width: 14, height: 14, border: '2px solid #fff', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
-                      AI 분석 중... (깊은 분석, 최대 1분)
+                      AI 분석 중... (깊은 분석, 1~3분 소요)
                     </>
                   ) : '✦ AI 가견적 분석'}
                 </button>
