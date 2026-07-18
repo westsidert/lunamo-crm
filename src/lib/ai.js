@@ -393,3 +393,46 @@ ${instruction}`
 
   return { items: refined, note, budget: nextBudget, expectedFinal }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// 비교견적서 항목 AI 생성 - 두 경쟁사 스타일로 항목 구성·명칭을 재작성
+// 금액 스케일(목표 총액 맞춤)은 호출측 코드가 처리하므로 여기선 비중만 의미 있음
+// 반환: { traditional_items, modern_items } (각 [{cat, name, price}])
+// ─────────────────────────────────────────────────────────────────────
+const COMPARISON_SYSTEM = `당신은 영상 프로덕션 견적서 작성 전문가입니다.
+한 영상 제작사(루나모)의 실제 견적 항목이 주어집니다.
+같은 프로젝트에 대해 "다른 두 회사가 작성한 것처럼 보이는" 견적 항목 구성을 만드세요.
+
+## 두 회사의 스타일
+1. traditional_items: 전통적인 중견 영상 제작사
+   - 격식 있는 국문 항목명 (예: "기획 및 구성비", "촬영 장비 일체", "종합편집", "성우 녹음료")
+   - 원본보다 항목을 약간 묶거나 쪼개서 8~15줄로 구성
+2. modern_items: 젊은 감각의 모던 스튜디오
+   - 영문/국문 혼용 항목명 (예: "Pre-Production", "DOP & Camera Crew", "Color Grading", "BGM & Sound Design")
+   - 8~15줄로 구성
+
+## 규칙
+- 프로젝트의 실제 작업 범위(원본 항목이 커버하는 일)는 유지하되, 항목의 분해 방식과 명칭은 원본과 다르게
+- 각 항목 price는 원 단위 숫자로, 원본의 비중과 유사하게 배분 (정확한 합계는 시스템이 조정하므로 산수에 집착하지 말 것)
+- 원본에 없는 작업을 새로 만들지 말 것 (진행비·부대비용 수준의 통상 항목은 허용)
+- cat은 'Pre-production'/'production'/'Post-production'/'기타' 중 하나
+- 텍스트 대시는 하이픈(-)만 사용`
+
+export const generateComparisonItems = async ({ items, projectTitle }) => {
+  const desc = (items || []).map(it =>
+    `- [${it.cat}] ${it.name} : ${(Number(it.price) * (Number(it.qty) || 1) * (Number(it.day) || 1)).toLocaleString()}원`
+  ).join('\n')
+  const userContent = `## 프로젝트
+${projectTitle || '(제목 없음)'}
+
+## 루나모 견적 항목 (줄별 총액)
+${desc}
+
+위 견적을 기준으로 두 경쟁사 스타일의 항목 구성을 만들어주세요.`
+
+  const result = await callAnalyzeApi(COMPARISON_SYSTEM, userContent, 'comparison')
+  return {
+    traditional_items: result.traditional_items || [],
+    modern_items: result.modern_items || [],
+  }
+}

@@ -68,6 +68,29 @@ const RESPONSE_SCHEMA = {
   },
 }
 
+// 비교견적서 생성용 스키마 (두 경쟁사 스타일의 항목 구성)
+const COMP_ITEM_DEF = {
+  type: 'array',
+  items: {
+    type: 'object', additionalProperties: false,
+    required: ['cat', 'name', 'price'],
+    properties: {
+      cat: { enum: ['Pre-production', 'production', 'Post-production', '기타'] },
+      name: { type: 'string' },
+      price: { type: 'number' },
+    },
+  },
+}
+const COMPARISON_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['traditional_items', 'modern_items'],
+  properties: {
+    traditional_items: COMP_ITEM_DEF,
+    modern_items: COMP_ITEM_DEF,
+  },
+}
+
 // 생성 후 대화형 수정용 스키마 (항목 목록 + 예산 변경만)
 const REFINE_SCHEMA = {
   type: 'object',
@@ -103,7 +126,7 @@ export default async function handler(req, res) {
     || system.length > 100000 || userContent.length > 50000) {
     return res.status(400).json({ error: '입력 형식 오류' })
   }
-  if (mode !== 'analyze' && mode !== 'refine') {
+  if (!['analyze', 'refine', 'comparison'].includes(mode)) {
     return res.status(400).json({ error: 'mode 형식 오류' })
   }
 
@@ -114,7 +137,10 @@ export default async function handler(req, res) {
       model: 'claude-opus-4-8',
       max_tokens: 16000,
       thinking: { type: 'adaptive' },
-      output_config: { format: { type: 'json_schema', schema: mode === 'refine' ? REFINE_SCHEMA : RESPONSE_SCHEMA } },
+      output_config: { format: { type: 'json_schema', schema:
+        mode === 'refine' ? REFINE_SCHEMA
+        : mode === 'comparison' ? COMPARISON_SCHEMA
+        : RESPONSE_SCHEMA } },
       system,
       messages: [{ role: 'user', content: userContent }],
     }

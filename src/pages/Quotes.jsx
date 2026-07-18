@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { getQuotes, createQuote, updateQuote, deleteQuote, getClients, createProjectFromQuote } from '../lib/api'
 import { formatKRW } from '../lib/utils'
-import { analyzeQuoteRequest, refineQuoteItems, matchClient, getLogo, getStamp, setLogo, setStamp } from '../lib/ai'
+import { analyzeQuoteRequest, refineQuoteItems, generateComparisonItems, matchClient, getLogo, getStamp, setLogo, setStamp } from '../lib/ai'
 import { saveQuoteAiFeedback } from '../lib/aiFeedback'
 import { supabase } from '../lib/supabase'
 import { downloadCsvRows } from '../lib/csv'
@@ -1597,7 +1597,7 @@ const setCompCompanies = (data) => { const v = JSON.stringify(data); localStorag
 
 const _sr = (n) => { const x = Math.sin(n + 1) * 10000; return x - Math.floor(x) }
 
-// B형 전용 항목명 매핑 (A형과 차별화)
+// B형 전용 항목명 매핑 (요약형 카테고리용)
 const COMP_B_NAME_MAP = {
   '기획/제작준비':       'Pre-Production',
   '연출':               '프로덕션 디렉팅',
@@ -1613,77 +1613,80 @@ const COMP_B_NAME_MAP = {
   '기타':               '기타',
 }
 
-// 비교견적 항목 통합 규칙 – 여러 세부 항목을 큰 카테고리로 합산
+// 상세형 항목명 변형 - 업체 A(전통 제작사, 격식 국문)
+const COMP_A_ITEM_MAP = {
+  '기획료': '기획 및 구성비', '시나리오': '시나리오 작성', '콘티': '스토리보드 제작', '진행비': '제작 진행비',
+  'PD': '프로듀서', '제작부': '제작지원팀', '감독': '연출감독', '연출부': '조연출',
+  '촬영감독': '촬영감독(DOP)', '촬영부': '촬영팀', '그립': '그립팀',
+  '조명감독': '조명감독', '조명부': '조명팀', '조명장비': '조명 장비 일체',
+  '사운드감독': '동시녹음 감독', '사운드팀': '동시녹음팀', '녹음기': '동시녹음 장비',
+  '미술감독': '미술감독', '미술팀': '미술팀', '소품제작': '소품 제작비', '소품대여': '소품 임차료',
+  '세트대여': '세트 임차료', '장소대여': '로케이션 사용료', '미술 기타': '미술 잡비',
+  '의상': '의상비', '분장': '분장/헤어', '모델': '출연료(모델)', '보조출연': '보조출연료',
+  '카메라': '카메라 장비', '렌즈': '렌즈 세트', '그립장비': '그립 장비', '크레인': '크레인 운용',
+  '장비 기타': '촬영 부대장비', '차량대여': '차량 운용비', '식대 및 기타': '현장 진행 식대',
+  '출장비': '출장 경비', '지원': '현장 지원 인력',
+  '편집': '종합편집', 'CG': 'CG 합성', '2D 그래픽': '2D 모션그래픽', '3D 그래픽': '3D 그래픽 제작',
+  '자막': '자막 및 타이틀', '색보정': '색보정(DI)',
+  '녹음료': '스튜디오 녹음', '음악': '배경음악(BGM)', '폴리': '음향효과(폴리)', '성우료': '성우 녹음료',
+  '번역 및 감수': '번역/감수료',
+}
+
+// 상세형 항목명 변형 - 업체 B(모던 스튜디오, 영문 혼용)
+const COMP_B_ITEM_MAP = {
+  '기획료': 'Planning & Concept', '시나리오': 'Scenario Writing', '콘티': 'Storyboard', '진행비': 'Production Management',
+  'PD': 'Producer', '제작부': 'Production Team', '감독': 'Director', '연출부': 'Assistant Director',
+  '촬영감독': 'DOP', '촬영부': 'Camera Crew', '그립': 'Grip',
+  '조명감독': 'Gaffer', '조명부': 'Lighting Crew', '조명장비': 'Lighting Equipment',
+  '사운드감독': 'Sound Supervisor', '사운드팀': 'Sound Crew', '녹음기': 'Audio Recording Kit',
+  '미술감독': 'Art Director', '미술팀': 'Art Team', '소품제작': 'Prop Making', '소품대여': 'Prop Rental',
+  '세트대여': 'Set Rental', '장소대여': 'Location Fee', '미술 기타': 'Art Misc.',
+  '의상': 'Wardrobe', '분장': 'Hair & Makeup', '모델': 'Casting(Model)', '보조출연': 'Extras',
+  '카메라': 'Camera Package', '렌즈': 'Lens Set', '그립장비': 'Grip Equipment', '크레인': 'Crane',
+  '장비 기타': 'Equipment Misc.', '차량대여': 'Transportation', '식대 및 기타': 'Catering & Misc.',
+  '출장비': 'Travel Expense', '지원': 'Support Staff',
+  '편집': 'Editing', 'CG': 'VFX/CG', '2D 그래픽': '2D Motion Graphic', '3D 그래픽': '3D Graphic',
+  '자막': 'Subtitle & Title', '색보정': 'Color Grading',
+  '녹음료': 'Studio Recording', '음악': 'BGM & Music', '폴리': 'Foley', '성우료': 'Voice Over',
+  '번역 및 감수': 'Translation & Review',
+}
+
+// 비교견적 항목 통합 규칙 (요약형) - 키워드 매칭, 순서 중요, 마지막 규칙이 낙수 처리
 const COMP_CONSOLIDATION = [
   { cat: 'Pre-production', name: '기획/제작준비',
-    match: i => i.cat === 'Pre-production' },
-  { cat: 'production',     name: '연출',
-    match: i => ['PD','제작부','감독','연출부'].includes(i.name) },
-  { cat: 'production',     name: '촬영',
-    match: i => ['촬영감독','촬영부','그립','카메라','렌즈','그립장비','크레인'].includes(i.name) },
-  { cat: 'production',     name: '조명',
-    match: i => ['조명감독','조명부','조명장비'].includes(i.name) },
-  { cat: 'production',     name: '사운드',
-    match: i => ['사운드감독','사운드팀','녹음기'].includes(i.name) },
-  { cat: 'production',     name: '미술/소품',
-    match: i => ['미술감독','미술팀','소품제작','소품대여','세트대여','미술 기타'].includes(i.name) },
-  { cat: 'production',     name: '헤어·메이크업·의상',
-    match: i => ['의상','분장'].includes(i.name) },
-  { cat: 'production',     name: '출연',
-    match: i => ['모델','보조출연'].includes(i.name) },
-  { cat: 'production',     name: '진행비',
-    match: i => ['차량대여','식대 및 기타','출장비','지원','장소대여'].includes(i.name) },
-  { cat: 'Post-production',name: '후반 제작',
-    match: i => ['편집','CG','2D 그래픽','3D 그래픽','자막','색보정'].includes(i.name) },
-  { cat: 'Post-production',name: '음향·음악',
-    match: i => ['녹음료','음악','폴리','성우료','번역 및 감수'].includes(i.name) },
-  { cat: '기타',           name: '기타',
-    match: i => i.cat === '기타' },
+    match: i => i.cat === 'Pre-production' || /기획|시나리오|콘티|구성|스토리보드|사전/.test(i.name) },
+  { cat: 'Post-production', name: '후반 제작',
+    match: i => /편집|CG|그래픽|자막|색보정|VFX|모션|DI|합성|타이틀/i.test(i.name) },
+  { cat: 'Post-production', name: '음향·음악',
+    match: i => /녹음료|음악|폴리|성우|더빙|믹싱|번역|감수|BGM|음향/i.test(i.name) },
+  { cat: 'production', name: '촬영',
+    match: i => /촬영|카메라|렌즈|그립|크레인|드론|짐벌|지미집|장비/.test(i.name) },
+  { cat: 'production', name: '조명',
+    match: i => /조명|라이팅/.test(i.name) },
+  { cat: 'production', name: '사운드',
+    match: i => /사운드|녹음|오디오|붐/.test(i.name) },
+  { cat: 'production', name: '미술/소품',
+    match: i => /미술|소품|세트/.test(i.name) },
+  { cat: 'production', name: '헤어·메이크업·의상',
+    match: i => /의상|분장|헤어|메이크업|스타일/.test(i.name) },
+  { cat: 'production', name: '출연',
+    match: i => /모델|출연|배우|캐스팅/.test(i.name) },
+  { cat: 'production', name: '진행비',
+    match: i => /차량|식대|출장|숙박|장소|진행|보험|지원|렌트|경비/.test(i.name) },
+  { cat: 'production', name: '연출',
+    match: i => /PD|프로듀서|제작부|연출|감독/i.test(i.name) },
+  { cat: '기타', name: '기타', match: () => true },
 ]
 
-const genCompItems = (items, lunamoFinal, multiplier, ci) => {
-  if (!items.length) return []
-  const targetFinal = Math.floor((lunamoFinal * multiplier) / 10000) * 10000
-
-  // 1. 항목 통합 – 세부 항목들을 큰 카테고리로 합산
-  const matched = new Set()
-  const groups = []
-  for (const rule of COMP_CONSOLIDATION) {
-    const hit = items.filter(it => rule.match(it))
-    if (!hit.length) continue
-    const sum = hit.reduce((s, it) => s + it.price * (it.qty || 1) * (it.day || 1), 0)
-    if (sum <= 0) continue
-    groups.push({ cat: rule.cat, name: rule.name, bName: COMP_B_NAME_MAP[rule.name] || rule.name, price: sum, qty: 1, day: 1 })
-    hit.forEach(it => matched.add(it))
-  }
-  // 매핑 안된 항목은 기타로
-  const unmatched = items.filter(it => !matched.has(it))
-  if (unmatched.length) {
-    const s = unmatched.reduce((sum, it) => sum + it.price * (it.qty||1) * (it.day||1), 0)
-    if (s > 0) {
-      const ex = groups.find(g => g.name === '기타')
-      if (ex) ex.price += s
-      else groups.push({ cat: '기타', name: '기타', bName: '기타', price: s, qty: 1, day: 1 })
-    }
-  }
-  if (!groups.length) return []
-
-  // 2. 그룹별 금액 랜덤 변동 (업체별 특색)
-  const varied = groups.map((g, i) => ({
-    ...g,
-    price: Math.max(Math.round(g.price * (0.87 + _sr(i * 13 + ci * 31) * 0.28) / 1000) * 1000, 1000),
-  }))
-
-  // 3. 목표 금액에 맞게 스케일
-  const variedSub = varied.reduce((s, it) => s + it.price, 0)
-  if (variedSub === 0) return varied
-  const scale = (targetFinal / 1.1) / variedSub
-  const scaled = varied.map(it => ({
+// 목표 최종금액(VAT 포함)에 맞게 rows(price=줄 총액)를 스케일 + 끝수 보정
+const scaleCompRows = (rows, targetFinal) => {
+  const sub = rows.reduce((s, it) => s + it.price, 0)
+  if (sub === 0) return rows
+  const scale = (targetFinal / 1.1) / sub
+  const scaled = rows.map(it => ({
     ...it,
     price: Math.max(Math.round(it.price * scale / 1000) * 1000, 1000),
   }))
-
-  // 4. 반올림 오차 보정
   const actualFinal = Math.floor(Math.round(scaled.reduce((s, it) => s + it.price, 0) * 1.1) / 10000) * 10000
   const diff = targetFinal - actualFinal
   if (diff !== 0) {
@@ -1691,6 +1694,52 @@ const genCompItems = (items, lunamoFinal, multiplier, ci) => {
     scaled[bi] = { ...scaled[bi], price: Math.max(scaled[bi].price + Math.round(diff / 1.1 / 1000) * 1000, 1000) }
   }
   return scaled
+}
+
+const compTargetFinal = (lunamoFinal, multiplier) => Math.floor((lunamoFinal * multiplier) / 10000) * 10000
+
+// 비교견적 항목 생성
+// mode 'detail': 루나모 항목 구조 1:1 유지 + 업체별 명칭 변형 (기본)
+// mode 'summary': 큰 카테고리로 통합 (기존 방식)
+const genCompItems = (items, lunamoFinal, multiplier, ci, mode = 'detail') => {
+  if (!items.length) return []
+  const targetFinal = compTargetFinal(lunamoFinal, multiplier)
+
+  if (mode === 'detail') {
+    const styleMap = ci === 0 ? COMP_A_ITEM_MAP : COMP_B_ITEM_MAP
+    const rows = items.map((it, i) => {
+      const lineSum = it.price * (it.qty || 1) * (it.day || 1)
+      const name = styleMap[it.name] || it.name
+      return {
+        cat: it.cat, name, bName: name, qty: 1, day: 1,
+        // ±5% 소폭 변동 (구성비 보존)
+        price: Math.max(Math.round(lineSum * (0.95 + _sr(i * 17 + ci * 41) * 0.1) / 1000) * 1000, 1000),
+      }
+    }).filter(r => r.price > 0)
+    return scaleCompRows(rows, targetFinal)
+  }
+
+  // 요약형: 키워드 규칙으로 통합 (마지막 규칙이 전부 낙수 처리하므로 누락 없음)
+  const matched = new Set()
+  const groups = []
+  for (const rule of COMP_CONSOLIDATION) {
+    const hit = items.filter(it => !matched.has(it) && rule.match(it))
+    if (!hit.length) continue
+    const sum = hit.reduce((s, it) => s + it.price * (it.qty || 1) * (it.day || 1), 0)
+    hit.forEach(it => matched.add(it))
+    if (sum <= 0) continue
+    const ex = groups.find(g => g.name === rule.name)
+    if (ex) ex.price += sum
+    else groups.push({ cat: rule.cat, name: rule.name, bName: COMP_B_NAME_MAP[rule.name] || rule.name, price: sum, qty: 1, day: 1 })
+  }
+  if (!groups.length) return []
+
+  // 그룹별 ±7% 변동 (업체별 특색, 구성비 크게 훼손하지 않는 수준)
+  const varied = groups.map((g, i) => ({
+    ...g,
+    price: Math.max(Math.round(g.price * (0.93 + _sr(i * 13 + ci * 31) * 0.14) / 1000) * 1000, 1000),
+  }))
+  return scaleCompRows(varied, targetFinal)
 }
 
 const getSelectedItems = (values, customItems) => [
@@ -2047,11 +2096,35 @@ function ComparisonQuotesModal({ items, finalAmount, meta, clientName, onClose }
   const [activeComp, setActiveComp] = useState(0)
   const [companies, setCompanies] = useState(getCompCompanies)
   const [showSettings, setShowSettings] = useState(false)
+  const [compMode, setCompMode] = useState('detail')   // 'detail' | 'summary'
+  const [aiComp, setAiComp] = useState(null)           // { 0: rows, 1: rows } | null
+  const [aiCompLoading, setAiCompLoading] = useState(false)
+  const [aiCompError, setAiCompError] = useState('')
 
   const comp = companies[activeComp]
-  const compItems = genCompItems(items, finalAmount, comp.multiplier, activeComp)
-  const compFinal = Math.floor((finalAmount * comp.multiplier) / 10000) * 10000
+  const compFinal = compTargetFinal(finalAmount, comp.multiplier)
+  // AI 생성본이 있으면 그것을 목표금액으로 스케일, 없으면 상세형/요약형 코드 생성
+  const compItems = aiComp?.[activeComp]
+    ? scaleCompRows(aiComp[activeComp], compFinal)
+    : genCompItems(items, finalAmount, comp.multiplier, activeComp, compMode)
   const compSub = compItems.reduce((s, it) => s + it.price * (it.qty || 1) * (it.day || 1), 0)
+
+  const handleAiPolish = async () => {
+    setAiCompError(''); setAiCompLoading(true)
+    try {
+      const { traditional_items, modern_items } = await generateComparisonItems({
+        items, projectTitle: meta.project_title,
+      })
+      if (!traditional_items.length || !modern_items.length) throw new Error('AI가 항목을 생성하지 못했습니다')
+      const toRows = (arr) => arr
+        .filter(it => it.name && Number(it.price) > 0)
+        .map(it => ({ cat: it.cat || 'production', name: it.name, bName: it.name, qty: 1, day: 1, price: Number(it.price) }))
+      setAiComp({ 0: toRows(traditional_items), 1: toRows(modern_items) })
+    } catch (e) {
+      setAiCompError('AI 생성 실패: ' + e.message)
+    }
+    setAiCompLoading(false)
+  }
 
   const qdStr = (() => {
     const d = new Date(meta.quote_date)
@@ -2087,11 +2160,45 @@ function ComparisonQuotesModal({ items, finalAmount, meta, clientName, onClose }
             ))}
           </div>
           <span style={{ color: '#64748b', fontSize: 12, marginLeft: 4 }}>{comp.name}</span>
+          {/* 상세형/요약형 토글 (AI 생성본 사용 중엔 비활성) */}
+          {!aiComp && (
+            <div style={{ display: 'flex', gap: 2, marginLeft: 8, background: '#1e293b', borderRadius: 20, padding: 2 }}>
+              {[['detail', '상세형'], ['summary', '요약형']].map(([m, label]) => (
+                <button key={m} onClick={() => setCompMode(m)} style={{
+                  padding: '4px 12px', borderRadius: 20, border: 'none', cursor: 'pointer', fontSize: 11,
+                  background: compMode === m ? '#475569' : 'none',
+                  color: compMode === m ? '#fff' : '#64748b',
+                  fontWeight: compMode === m ? 700 : 400,
+                }}>{label}</button>
+              ))}
+            </div>
+          )}
+          {aiComp && (
+            <span style={{ marginLeft: 8, fontSize: 11, color: '#a78bfa', background: '#2e1065', padding: '3px 10px', borderRadius: 20, fontWeight: 600 }}>
+              ✦ AI 생성본
+            </span>
+          )}
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <span style={{ color: '#7c3aed', fontSize: 13, fontWeight: 700, alignSelf: 'center' }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {aiCompError && <span style={{ color: '#f87171', fontSize: 12 }}>{aiCompError}</span>}
+          <span style={{ color: '#7c3aed', fontSize: 13, fontWeight: 700 }}>
             최종금액 {compFinal.toLocaleString('ko-KR')}원
           </span>
+          {aiComp ? (
+            <button onClick={() => setAiComp(null)} style={{ ...btnPrimary, background: '#334155' }}>
+              기본 버전으로
+            </button>
+          ) : (
+            <button onClick={handleAiPolish} disabled={aiCompLoading}
+              style={{ ...btnPrimary, background: '#7c3aed', opacity: aiCompLoading ? 0.7 : 1 }}>
+              {aiCompLoading ? (
+                <>
+                  <span style={{ display: 'inline-block', width: 12, height: 12, border: '2px solid #fff', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite', marginRight: 6, verticalAlign: '-2px' }} />
+                  생성 중... (30초~1분)
+                </>
+              ) : '✦ AI로 항목 다듬기'}
+            </button>
+          )}
           <button onClick={() => setShowSettings(true)} style={{ ...btnPrimary, background: '#334155' }}>⚙️ 업체 설정</button>
           <button onClick={handlePrint} style={{ ...btnPrimary, background: '#475569' }}>🖨️ 인쇄 / PDF 저장</button>
           <button onClick={onClose} style={{ padding: '7px 18px', borderRadius: 8, border: '1px solid #475569', background: 'none', color: '#cbd5e1', cursor: 'pointer', fontSize: 13 }}>닫기</button>
