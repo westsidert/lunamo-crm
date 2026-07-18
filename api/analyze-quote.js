@@ -119,18 +119,41 @@ export default async function handler(req, res) {
       messages: [{ role: 'user', content: userContent }],
     }
 
-    const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify(body),
-    })
+    // 일시 오류(과부하 529, 레이트리밋 429, 5xx)는 백오프 후 자동 재시도
+    const RETRYABLE = [429, 500, 502, 503, 529]
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms))
+    let aiRes
+    for (let attempt = 0; ; attempt++) {
+      try {
+        aiRes = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': process.env.ANTHROPIC_API_KEY,
+            'anthropic-version': '2023-06-01',
+          },
+          body: JSON.stringify(body),
+        })
+      } catch (e) {
+        if (attempt >= 2) throw e
+        await sleep((attempt + 1) * 2000)
+        continue
+      }
+      if (RETRYABLE.includes(aiRes.status) && attempt < 2) {
+        await sleep((attempt + 1) * 2000)
+        continue
+      }
+      break
+    }
     if (!aiRes.ok) {
       const err = await aiRes.json().catch(() => ({}))
-      return res.status(aiRes.status).json({ error: err.error?.message || `Anthropic API 오류 (${aiRes.status})` })
+      const raw = err.error?.message || ''
+      const friendly =
+        aiRes.status === 529 ? 'AI 서버가 일시적으로 혼잡합니다. 잠시 후 다시 시도해주세요.'
+        : aiRes.status === 429 ? '요청이 몰려 잠시 제한되었습니다. 잠시 후 다시 시도해주세요.'
+        : aiRes.status >= 500 ? 'AI 서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요.'
+        : raw || `Anthropic API 오류 (${aiRes.status})`
+      return res.status(aiRes.status).json({ error: friendly })
     }
     const data = await aiRes.json()
     if (data.stop_reason === 'refusal') {
