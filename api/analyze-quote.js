@@ -68,6 +68,19 @@ const RESPONSE_SCHEMA = {
   },
 }
 
+// 생성 후 대화형 수정용 스키마 (항목 목록 + 예산 변경만)
+const REFINE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['items', 'budget_total', 'budget_includes_vat', 'note'],
+  properties: {
+    items: RESPONSE_SCHEMA.properties.items,
+    budget_total: { anyOf: [{ type: 'number' }, { type: 'null' }] },
+    budget_includes_vat: { type: 'boolean' },
+    note: { type: 'string' },
+  },
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end()
 
@@ -84,11 +97,14 @@ export default async function handler(req, res) {
   if (authError || !user) return res.status(401).json({ error: '유효하지 않은 세션' })
 
   // ── 입력 ──
-  const { system, userContent } = req.body || {}
+  const { system, userContent, mode = 'analyze' } = req.body || {}
   if (!system || !userContent) return res.status(400).json({ error: 'system, userContent 필수' })
   if (typeof system !== 'string' || typeof userContent !== 'string'
     || system.length > 100000 || userContent.length > 50000) {
     return res.status(400).json({ error: '입력 형식 오류' })
+  }
+  if (mode !== 'analyze' && mode !== 'refine') {
+    return res.status(400).json({ error: 'mode 형식 오류' })
   }
 
   // ── Anthropic 호출 ──
@@ -98,7 +114,7 @@ export default async function handler(req, res) {
       model: 'claude-opus-4-8',
       max_tokens: 16000,
       thinking: { type: 'adaptive' },
-      output_config: { format: { type: 'json_schema', schema: RESPONSE_SCHEMA } },
+      output_config: { format: { type: 'json_schema', schema: mode === 'refine' ? REFINE_SCHEMA : RESPONSE_SCHEMA } },
       system,
       messages: [{ role: 'user', content: userContent }],
     }

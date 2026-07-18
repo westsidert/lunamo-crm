@@ -245,7 +245,7 @@ ${feedbackDesc ? `## 과거 AI 초안을 대표가 수정한 기록 (대표의 �
 // ─────────────────────────────────────────────────────────────────────
 // 서버 API 호출
 // ─────────────────────────────────────────────────────────────────────
-const callAnalyzeApi = async (system, userContent) => {
+const callAnalyzeApi = async (system, userContent, mode = 'analyze') => {
   const { data: { session } } = await supabase.auth.getSession()
   if (!session) throw new Error('로그인이 필요합니다')
 
@@ -255,7 +255,7 @@ const callAnalyzeApi = async (system, userContent) => {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${session.access_token}`,
     },
-    body: JSON.stringify({ system, userContent }),
+    body: JSON.stringify({ system, userContent, mode }),
   })
   if (!res.ok) {
     if (res.status === 504) throw new Error('분석 시간이 초과되었습니다. 잠시 후 다시 시도해주세요.')
@@ -320,4 +320,76 @@ export const analyzeQuoteRequest = async (description, pastQuotes = [], allItems
   if (opts.answers?.length) result.clarifying_questions = []
 
   return result
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 생성 후 대화형 수정 (자유 지시 → 항목 구조 수정은 AI, 예산 재맞춤은 코드)
+// currentItems: [{ cat, sub, name, day, qty, price, basis? }]
+// budget: { total, includesVat } | null  (현재 목표 예산, 없으면 null)
+// 반환: { items, note, budget: {total, includesVat} | null, expectedFinal | null }
+// ─────────────────────────────────────────────────────────────────────
+const buildRefinePrompt = (allItems) => {
+  const itemsDesc = allItems
+    .map(it => `[${it.cat} / ${it.sub}] ${it.name} : 기본단가 ${it.price.toLocaleString()}원`)
+    .join('\n')
+  return `당신은 루나모 영상 프로덕션의 견적 수정 어시스턴트입니다.
+현재 견적 항목 목록과 사용자의 수정 지시가 주어집니다.
+지시를 적용한 "전체 항목 목록"을 반환하세요.
+
+## 규칙
+- 지시와 무관한 항목은 그대로 유지할 것 (이름·단가·일수·수량을 임의로 바꾸지 말 것)
+- 지시된 삭제·추가·수량/일수/단가 변경은 정확히 반영
+- 항목 추가 시 아래 단가표의 기본단가를 참고, 표에 없는 항목은 업계 관행에 맞는 합리적 단가로 추가
+- 사용자가 새 목표 예산을 언급하면 budget_total(원 단위 숫자, 예: 500만원 → 5000000)과
+  budget_includes_vat에 반영. 예산 언급이 없으면 budget_total은 null
+- 예산 합계 산수는 시스템이 자동 처리하므로 스스로 합계를 맞추려고 단가를 조정하지 말 것
+- basis: 새로 추가되거나 변경된 항목만 이유 한 문장, 유지된 항목은 기존 근거를 그대로
+- note: 무엇을 어떻게 바꿨는지 1~2문장
+- day·qty는 양의 정수, price는 만원 단위, 텍스트 대시는 하이픈(-)만 사용
+
+## 사용 가능한 항목 목록 (단가표)
+${itemsDesc}`
+}
+
+export const refineQuoteItems = async ({ items, instruction, budget = null, allItems = [] }) => {
+  const currentDesc = (items || []).map(it =>
+    `- [${it.cat}${it.sub ? ` / ${it.sub}` : ''}] ${it.name} : ${Number(it.price).toLocaleString()}원 × ${it.qty}수량 × ${it.day}일${it.basis ? ` (근거: ${it.basis})` : ''}`
+  ).join('\n')
+  const budgetDesc = budget?.total
+    ? `${Number(budget.total).toLocaleString()}원 (${budget.includesVat ? 'VAT 포함' : 'VAT 별도'})`
+    : '설정 안 됨'
+
+  const userContent = `## 현재 견적 항목
+${currentDesc || '(없음)'}
+
+## 현재 목표 예산
+${budgetDesc}
+
+## 수정 지시
+${instruction}`
+
+  const result = await callAnalyzeApi(buildRefinePrompt(allItems), userContent, 'refine')
+
+  // 예산 결정: 지시에 새 예산이 있으면 그것, 없으면 기존 예산 유지
+  const nextBudget = result.budget_total
+    ? { total: Number(result.budget_total), includesVat: !!result.budget_includes_vat }
+    : budget
+
+  let refined = result.items || []
+  let expectedFinal = null
+  if (nextBudget?.total && refined.length) {
+    const fit = fitItemsToBudget(refined, nextBudget.total, nextBudget.includesVat)
+    if (fit.adjusted || fit.expectedFinal != null) {
+      refined = fit.items
+      expectedFinal = fit.expectedFinal
+    }
+  }
+
+  let note = result.note || ''
+  if (expectedFinal != null && nextBudget?.total) {
+    note += ` (예산 ${Number(nextBudget.total).toLocaleString()}원${nextBudget.includesVat ? ' VAT포함' : ''} 기준,`
+      + ` 견적 최종금액 ${expectedFinal.toLocaleString()}원으로 자동 조정)`
+  }
+
+  return { items: refined, note, budget: nextBudget, expectedFinal }
 }

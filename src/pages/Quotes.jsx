@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { getQuotes, createQuote, updateQuote, deleteQuote, getClients, createProjectFromQuote } from '../lib/api'
 import { formatKRW } from '../lib/utils'
-import { analyzeQuoteRequest, matchClient, getLogo, getStamp, setLogo, setStamp } from '../lib/ai'
+import { analyzeQuoteRequest, refineQuoteItems, matchClient, getLogo, getStamp, setLogo, setStamp } from '../lib/ai'
 import { saveQuoteAiFeedback } from '../lib/aiFeedback'
 import { supabase } from '../lib/supabase'
 import { downloadCsvRows } from '../lib/csv'
@@ -365,6 +365,13 @@ function QuoteWizard({ initial, clients, pastQuotes = [], onClose, onSave }) {
   const [aiDraft, setAiDraft]       = useState(null)   // 피드백 기록용 {description, result}
   const [showBasis, setShowBasis]   = useState(false)
 
+  // ── Step 1: AI 대화형 수정 상태 ──
+  const [refineText, setRefineText]       = useState('')
+  const [refineLoading, setRefineLoading] = useState(false)
+  const [refineError, setRefineError]     = useState('')
+  const [aiBudget, setAiBudget]           = useState(null)     // {total, includesVat} | null
+  const [lastSnapshot, setLastSnapshot]   = useState(null)     // 수정 전 {values, customItems} (되돌리기)
+
   // Step1 표시용 요약 (aiDraft에서 파생)
   const aiSummary = useMemo(() => {
     if (!aiDraft) return null
@@ -395,9 +402,23 @@ function QuoteWizard({ initial, clients, pastQuotes = [], onClose, onSave }) {
     }
     // 함수형 업데이트: 분석 대기 중 바뀐 최신 memo 기준으로 판정 (stale closure 방지)
     if (result.memo) setMeta(m => (m.memo ? m : { ...m, memo: result.memo }))
+    applyItemsToForm(result.items || [])
+    setAiDraft({ description: aiDesc, result })
+    setAiBudget(result.budget_total
+      ? { total: Number(result.budget_total), includesVat: !!result.budget_includes_vat }
+      : null)
+    setLastSnapshot(null)
+    setAiQuestions([])
+    setPendingResult(null)
+    setOnlyFilled(true)
+    setStep(1)
+  }
+
+  // AI 항목 목록을 산출 양식(values/customItems)에 반영
+  const applyItemsToForm = (items) => {
     const newValues = initValues()
     const newCustom = []
-    ;(result.items || []).forEach(item => {
+    ;(items || []).forEach(item => {
       const match = ALL_ITEMS.find(a => a.name === item.name && a.cat === item.cat)
       if (match) {
         newValues[itemKey(match)] = { day: item.day, qty: item.qty, price: item.price ?? match.price, nameOverride: '' }
@@ -407,11 +428,64 @@ function QuoteWizard({ initial, clients, pastQuotes = [], onClose, onSave }) {
     })
     setValues(newValues)
     setCustomItems(newCustom)
-    setAiDraft({ description: aiDesc, result })
-    setAiQuestions([])
-    setPendingResult(null)
-    setOnlyFilled(true)
-    setStep(1)
+  }
+
+  // 현재 산출 양식 상태 → AI 수정용 항목 목록 (사용자 수동 수정분 포함)
+  const collectCurrentItems = () => {
+    const basisOf = (name) => aiSummary?.items.find(it => it.name === name)?.basis || ''
+    const preset = ALL_ITEMS
+      .filter(item => calcItemSum(values[itemKey(item)] || {}) > 0)
+      .map(item => {
+        const v = values[itemKey(item)]
+        const name = (v.nameOverride && v.nameOverride.trim()) ? v.nameOverride.trim() : item.name
+        return { cat: item.cat, sub: item.sub, name, day: Number(v.day) || 1, qty: Number(v.qty) || 1, price: Number(v.price) || 0, basis: basisOf(name) }
+      })
+    const custom = customItems
+      .filter(ci => ci.name && calcItemSum(ci) > 0)
+      .map(ci => ({ cat: ci.cat || '기타', sub: '', name: ci.name, day: Number(ci.day) || 1, qty: Number(ci.qty) || 1, price: Number(ci.price) || 0, basis: basisOf(ci.name) }))
+    return [...preset, ...custom]
+  }
+
+  // 대화형 수정 실행
+  const handleRefine = async () => {
+    const instruction = refineText.trim()
+    if (!instruction) return
+    setRefineError(''); setRefineLoading(true)
+    try {
+      const current = collectCurrentItems()
+      if (current.length === 0) throw new Error('수정할 항목이 없습니다. 먼저 항목을 입력하거나 AI 분석을 실행하세요.')
+      const snapshot = { values, customItems, aiDraft, aiBudget }
+      const r = await refineQuoteItems({ items: current, instruction, budget: aiBudget, allItems: ALL_ITEMS })
+      setLastSnapshot(snapshot)
+      applyItemsToForm(r.items)
+      setAiBudget(r.budget || null)
+      // 피드백 루프 기준점 갱신: 마지막 AI 산출 vs 저장본으로 diff가 잡히도록
+      setAiDraft(prev => ({
+        description: (prev?.description || '(수동 작성 견적)') + '\n[수정지시] ' + instruction,
+        result: {
+          ...(prev?.result || {}),
+          items: r.items,
+          note: r.note,
+          budget_total: r.budget?.total ?? null,
+          budget_includes_vat: r.budget?.includesVat ?? true,
+          video_type: prev?.result?.video_type ?? null,
+        },
+      }))
+      setRefineText('')
+    } catch (e) {
+      setRefineError('수정 실패: ' + e.message)
+    }
+    setRefineLoading(false)
+  }
+
+  // 마지막 AI 수정 되돌리기 (표 + AI 요약/예산 기준점 모두 복원)
+  const undoRefine = () => {
+    if (!lastSnapshot) return
+    setValues(lastSnapshot.values)
+    setCustomItems(lastSnapshot.customItems)
+    setAiDraft(lastSnapshot.aiDraft)
+    setAiBudget(lastSnapshot.aiBudget)
+    setLastSnapshot(null)
   }
 
   // 확인 질문 답변 반영 재분석
@@ -673,6 +747,53 @@ function QuoteWizard({ initial, clients, pastQuotes = [], onClose, onSave }) {
                 </div>
               </div>
             )}
+
+            {/* AI 대화형 수정 */}
+            <div style={{ background: '#fff', borderRadius: 12, border: '1.5px solid #ddd6fe', padding: '14px 18px', marginBottom: 20 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: '#7c3aed' }}>✦ AI로 수정하기</div>
+                <div style={{ fontSize: 11, color: '#94a3b8' }}>
+                  목표 예산: {aiBudget?.total
+                    ? `${formatKRW(aiBudget.total)}원 (${aiBudget.includesVat ? 'VAT 포함' : 'VAT 별도'})`
+                    : '설정 안 됨 (지시로 설정 가능)'}
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <input
+                  value={refineText}
+                  onChange={e => setRefineText(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter' && !refineLoading) handleRefine() }}
+                  placeholder="예) 촬영감독 2명으로 줄이고 장비대여비 추가해줘 / 예산 500만원 VAT포함에 맞춰줘"
+                  disabled={refineLoading}
+                  style={{ ...inputStyle, flex: 1, minWidth: 260 }}
+                />
+                {lastSnapshot && !refineLoading && (
+                  <button type="button" onClick={undoRefine} style={{ ...btnCancel, fontSize: 13 }}>
+                    ↩ 되돌리기
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={handleRefine}
+                  disabled={refineLoading || !refineText.trim()}
+                  style={{ ...btnPrimary, background: '#7c3aed', fontSize: 13,
+                    opacity: (refineLoading || !refineText.trim()) ? 0.6 : 1,
+                    cursor: (refineLoading || !refineText.trim()) ? 'not-allowed' : 'pointer' }}>
+                  {refineLoading ? (
+                    <>
+                      <span style={{ display: 'inline-block', width: 12, height: 12, border: '2px solid #fff', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite', marginRight: 6, verticalAlign: '-2px' }} />
+                      수정 중... (30초~1분)
+                    </>
+                  ) : '적용 →'}
+                </button>
+              </div>
+              {refineError && (
+                <div style={{ marginTop: 8, fontSize: 12, color: '#dc2626' }}>{refineError}</div>
+              )}
+              <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 8, lineHeight: 1.6 }}>
+                현재 표의 항목(직접 수정한 값 포함) 기준으로 지시를 반영하고, 목표 예산이 있으면 합계를 다시 맞춥니다.
+              </div>
+            </div>
 
             {/* 기본 정보 */}
             <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e2e8f0', padding: '20px 24px', marginBottom: 20 }}>
