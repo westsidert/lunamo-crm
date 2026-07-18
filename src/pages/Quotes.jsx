@@ -1679,19 +1679,26 @@ const COMP_CONSOLIDATION = [
 ]
 
 // 목표 최종금액(VAT 포함)에 맞게 rows(price=줄 총액)를 스케일 + 끝수 보정
+// 모든 줄 금액은 만원 단위 유지 (예: 115,000 대신 110,000)
 const scaleCompRows = (rows, targetFinal) => {
   const sub = rows.reduce((s, it) => s + it.price, 0)
   if (sub === 0) return rows
   const scale = (targetFinal / 1.1) / sub
   const scaled = rows.map(it => ({
     ...it,
-    price: Math.max(Math.round(it.price * scale / 1000) * 1000, 1000),
+    price: Math.max(Math.round(it.price * scale / 10000) * 10000, 10000),
   }))
-  const actualFinal = Math.floor(Math.round(scaled.reduce((s, it) => s + it.price, 0) * 1.1) / 10000) * 10000
-  const diff = targetFinal - actualFinal
-  if (diff !== 0) {
-    const bi = scaled.reduce((mi, it, i) => it.price > scaled[mi].price ? i : mi, 0)
-    scaled[bi] = { ...scaled[bi], price: Math.max(scaled[bi].price + Math.round(diff / 1.1 / 1000) * 1000, 1000) }
+  const finalOf = () => Math.floor(Math.round(scaled.reduce((s, it) => s + it.price, 0) * 1.1) / 10000) * 10000
+  const bi = scaled.reduce((mi, it, i) => it.price > scaled[mi].price ? i : mi, 0)
+  // 만원 스텝 보정: 목표에 근접시키되 초과하지 않게
+  const diffUnits = Math.round((targetFinal - finalOf()) / 1.1 / 10000)
+  if (diffUnits !== 0) {
+    scaled[bi] = { ...scaled[bi], price: Math.max(scaled[bi].price + diffUnits * 10000, 10000) }
+  }
+  let guard = 0
+  while (finalOf() > targetFinal && scaled[bi].price > 10000 && guard < 50) {
+    scaled[bi] = { ...scaled[bi], price: scaled[bi].price - 10000 }
+    guard++
   }
   return scaled
 }
@@ -1712,8 +1719,8 @@ const genCompItems = (items, lunamoFinal, multiplier, ci, mode = 'detail') => {
       const name = styleMap[it.name] || it.name
       return {
         cat: it.cat, name, bName: name, qty: 1, day: 1,
-        // ±5% 소폭 변동 (구성비 보존)
-        price: Math.max(Math.round(lineSum * (0.95 + _sr(i * 17 + ci * 41) * 0.1) / 1000) * 1000, 1000),
+        // ±5% 소폭 변동 (구성비 보존, 만원 단위)
+        price: Math.max(Math.round(lineSum * (0.95 + _sr(i * 17 + ci * 41) * 0.1) / 10000) * 10000, 10000),
       }
     }).filter(r => r.price > 0)
     return scaleCompRows(rows, targetFinal)
@@ -1734,12 +1741,19 @@ const genCompItems = (items, lunamoFinal, multiplier, ci, mode = 'detail') => {
   }
   if (!groups.length) return []
 
-  // 그룹별 ±7% 변동 (업체별 특색, 구성비 크게 훼손하지 않는 수준)
+  // 그룹별 ±7% 변동 (업체별 특색, 구성비 크게 훼손하지 않는 수준, 만원 단위)
   const varied = groups.map((g, i) => ({
     ...g,
-    price: Math.max(Math.round(g.price * (0.93 + _sr(i * 13 + ci * 31) * 0.14) / 1000) * 1000, 1000),
+    price: Math.max(Math.round(g.price * (0.93 + _sr(i * 13 + ci * 31) * 0.14) / 10000) * 10000, 10000),
   }))
   return scaleCompRows(varied, targetFinal)
+}
+
+// B형 단가×수량 분할 - 단가가 만원 단위로 나누어떨어지는 수량만 선택 (아니면 1)
+const splitCompUnit = (item, i) => {
+  const candidates = _sr(i * 19 + 7) < 0.5 ? [2, 3] : [3, 2]
+  const qty = candidates.find(q => item.price % (10000 * q) === 0 && item.price / q >= 10000) || 1
+  return { displayQty: qty, unitPrice: item.price / qty }
 }
 
 const getSelectedItems = (values, customItems) => [
@@ -1865,13 +1879,9 @@ function CompPreviewA({ comp, items, meta, clientName, qdStr, finalAmount, subTo
 function CompPreviewB({ comp, items, meta, clientName, qdStr, finalAmount, subTotal }) {
   const PCATS = ['Pre-production', 'production', 'Post-production', '기타']
   const vat = Math.round(subTotal * 0.1)
-  // 항목별 단가/수량 분할 (시드 기반 고정 랜덤)
+  // 항목별 단가/수량 분할 (만원 단위 유지, 단가×수량 == 금액 보장)
   const allItems = PCATS.flatMap(cat => items.filter(i => i.cat === cat))
-  const bRows = allItems.map((item, i) => {
-    const qty = Math.floor(_sr(i * 19 + 7) * 3) + 1   // 1~3
-    const unitPrice = Math.round(item.price / qty / 1000) * 1000 || item.price
-    return { ...item, displayQty: qty, unitPrice }
-  })
+  const bRows = allItems.map((item, i) => ({ ...item, ...splitCompUnit(item, i) }))
   let rowIdx = 0
   return (
     <div style={{
@@ -2031,8 +2041,7 @@ const buildCompHtmlB = (comp, items, meta, clientName, qdStr, subTotal, finalAmo
   const allItems = PCATS.flatMap(cat => items.filter(i => i.cat === cat))
   let rowIdx = 0
   const rows = allItems.map((item, i) => {
-    const qty = Math.floor(_sr(i * 19 + 7) * 3) + 1
-    const unitPrice = Math.round(item.price / qty / 1000) * 1000 || item.price
+    const { displayQty: qty, unitPrice } = splitCompUnit(item, i)
     const bg = rowIdx++ % 2 === 0 ? '#fff' : '#f7f9fc'
     return `<tr style="background:${bg};border-bottom:1px solid #eef2f7;">
       <td style="padding:10px 14px;font-size:12px;text-align:center;color:#aaa;width:36px;">${i + 1}</td>
