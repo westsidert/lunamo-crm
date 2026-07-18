@@ -1,4 +1,9 @@
 {
+  "functions": {
+    "api/analyze-quote.js": {
+      "maxDuration": 60
+    }
+  },
   "crons": [
     {
       "path": "/api/cron/auto-expense",

@@ -1,6 +1,9 @@
 import { supabase } from './supabase'
+import { sumQuoteItems } from './utils'
+import { fetchQuoteFeedback } from './aiFeedback'
 
 // AI 호출이 서버사이드(api/analyze-quote.js)로 이전되어 브라우저 키 불필요.
+// 응답 JSON 스키마도 서버(api/analyze-quote.js)가 보관한다.
 // 과거 localStorage에 저장된 키는 제거.
 try { localStorage.removeItem('anthropic_key') } catch { /* SSR 등 */ }
 
@@ -10,7 +13,8 @@ export const setLogo  = (b64) => { b64 ? localStorage.setItem('company_logo', b6
 export const setStamp = (b64) => { b64 ? localStorage.setItem('company_stamp', b64) : localStorage.removeItem('company_stamp'); import('./settings').then(m => m.saveSetting('company_stamp', b64 || null)) }
 
 // ─────────────────────────────────────────────────────────────────────
-// 의뢰문과 가장 유사한 과거 견적 N건 추리기 (키워드 토큰 겹침 기반)
+// 의뢰문과 가장 유사한 과거 견적 추리기 (키워드 토큰 겹침 기반)
+// 겹치는 사례가 없으면 최근 수주 사례를 "유사도 낮음" 라벨로 대체 주입
 // ─────────────────────────────────────────────────────────────────────
 const tokenize = (s) => (s || '').toLowerCase()
   .replace(/[^\p{L}\p{N}\s]/gu, ' ')
@@ -19,9 +23,14 @@ const tokenize = (s) => (s || '').toLowerCase()
 
 const pickSimilarQuotes = (description, pastQuotes, n = 3) => {
   const descTokens = new Set(tokenize(description))
-  if (descTokens.size === 0) return pastQuotes.slice(0, n)
-  const scored = pastQuotes
-    .filter(q => q.status === '수주')   // 신뢰도 높은 사례만
+  const recentWon = () => pastQuotes
+    .filter(q => q.status === '수주')
+    .slice(0, 2)
+    .map(quote => ({ quote, lowSim: true }))
+  if (descTokens.size === 0) return recentWon()
+
+  const picked = pastQuotes
+    .filter(q => q.status === '수주' || q.status === '미수주')
     .map(q => {
       const haystack = [q.project_title, ...(q.quote_items || []).map(i => i.contents || '')].join(' ')
       const tokens = new Set(tokenize(haystack))
@@ -29,14 +38,12 @@ const pickSimilarQuotes = (description, pastQuotes, n = 3) => {
       descTokens.forEach(t => { if (tokens.has(t)) score++ })
       return { q, score }
     })
-    .sort((a, b) => b.score - a.score)
-  const top = scored.filter(x => x.score > 0).slice(0, n).map(x => x.q)
-  // 유사 사례가 부족하면 최근 수주 견적으로 채움
-  if (top.length < n) {
-    const fallback = pastQuotes.filter(q => q.status === '수주' && !top.includes(q)).slice(0, n - top.length)
-    return [...top, ...fallback]
-  }
-  return top
+    .filter(x => x.score > 0)
+    .sort((a, b) => b.score - a.score || (b.q.status === '수주') - (a.q.status === '수주'))
+    .slice(0, n)
+    .map(x => ({ quote: x.q, lowSim: false }))
+
+  return picked.length > 0 ? picked : recentWon()
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -59,32 +66,118 @@ export const matchClient = (clientName, clients = []) => {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// 합계 계산 (예산 검증용)
+// 예산 맞춤 - 산수는 AI가 아니라 코드가 담당
+// 모든 단가를 만원 단위로 유지한 채, 견적서 최종금액(calcTotals와 동일:
+// floor(round(공급가합계 × 1.1) / 10000) × 10000)이 예산을 넘지 않는
+// 최대 공급가를 목표로 잡고, 비율 스케일링 + 만원 단위 반복 흡수로 맞춘다.
 // ─────────────────────────────────────────────────────────────────────
-const calcResultSum = (items = []) =>
-  items.reduce((s, it) => s + (Number(it.price) || 0) * (Number(it.qty) || 1) * (Number(it.day) || 1), 0)
+const finalAmountOf = (supply) => Math.floor(Math.round(supply * 1.1) / 10000) * 10000
+
+export const fitItemsToBudget = (items, budgetTotal, includesVat) => {
+  const budget = Number(budgetTotal) || 0
+  if (budget <= 0 || !Array.isArray(items) || items.length === 0) {
+    return { items, adjusted: false, expectedFinal: null }
+  }
+  const list = items.map(it => ({
+    ...it,
+    price: Number(it.price) || 0,
+    qty: Math.max(1, Math.round(Number(it.qty) || 1)),
+    day: Math.max(1, Math.round(Number(it.day) || 1)),
+  }))
+
+  // 목표 공급가: 만원 단위 값 중 최종금액이 예산을 넘지 않는 최대값
+  let target
+  if (includesVat) {
+    target = Math.floor(budget / 1.1 / 10000) * 10000
+    while (finalAmountOf(target + 10000) <= budget) target += 10000
+  } else {
+    target = Math.floor(budget / 10000) * 10000
+  }
+  const cur = sumQuoteItems(list)
+  if (target <= 0 || cur <= 0) return { items: list, adjusted: false, expectedFinal: null }
+  if (cur === target) return { items: list, adjusted: false, expectedFinal: finalAmountOf(cur) }
+
+  // 1) 비율 유지 스케일링 (만원 단위, 최소 1만원)
+  const scale = target / cur
+  const scaled = list.map(it => ({
+    ...it,
+    price: Math.max(10000, Math.round(it.price * scale / 10000) * 10000),
+  }))
+
+  // 2) 잔차를 만원 단위 스텝으로 여러 항목에 반복 흡수 (qty×day 작은 항목부터)
+  let residual = target - sumQuoteItems(scaled)
+  const order = scaled.map((_, i) => i)
+    .sort((a, b) => (scaled[a].qty * scaled[a].day) - (scaled[b].qty * scaled[b].day))
+  for (const i of order) {
+    if (residual === 0) break
+    const k = scaled[i].qty * scaled[i].day
+    const step = 10000 * k
+    let units = Math.trunc(residual / step)
+    // 단가 최소 1만원 유지 (감소 하한)
+    const minUnits = Math.ceil((10000 - scaled[i].price) / 10000)
+    if (units < minUnits) units = minUnits
+    if (units !== 0) {
+      scaled[i] = { ...scaled[i], price: scaled[i].price + units * 10000 }
+      residual -= units * step
+    }
+  }
+  // 3) 흡수 불가 잔차로 예산을 초과하면 만원 스텝으로 낮춰 초과 방지 (strict 안전)
+  //    (모든 항목의 qty×day > 1이면 만원 스텝 흡수가 불가능한 잔차가 남을 수 있음)
+  const exceedsBudget = () => includesVat
+    ? finalAmountOf(sumQuoteItems(scaled)) > budget
+    : sumQuoteItems(scaled) > budget
+  let guard = 0
+  while (exceedsBudget() && guard < 100) {
+    let lowered = false
+    for (const i of order) {
+      if (scaled[i].price - 10000 >= 10000) {
+        scaled[i] = { ...scaled[i], price: scaled[i].price - 10000 }
+        lowered = true
+        break
+      }
+    }
+    if (!lowered) break
+    guard++
+  }
+
+  // 남은 잔차는 만원 미만 끝수이거나 흡수 불가한 경우 - 최종금액은 실제 합계 기준으로 보고
+  return { items: scaled, adjusted: true, expectedFinal: finalAmountOf(sumQuoteItems(scaled)) }
+}
 
 // ─────────────────────────────────────────────────────────────────────
-// AI 견적 분석
+// 시스템 프롬프트
 // ─────────────────────────────────────────────────────────────────────
-const buildSystemPrompt = (allItems, similarQuotes) => {
+const buildSystemPrompt = (allItems, similarQuotes, feedbackCases) => {
   const itemsDesc = allItems
-    .map(it => `[${it.cat} / ${it.sub}] ${it.name} — 기본단가 ${it.price.toLocaleString()}원`)
+    .map(it => `[${it.cat} / ${it.sub}] ${it.name} : 기본단가 ${it.price.toLocaleString()}원`)
     .join('\n')
 
-  const examplesDesc = similarQuotes.map((q, i) => {
+  const examplesDesc = similarQuotes.map(({ quote: q, lowSim }, i) => {
     const rows = (q.quote_items || [])
       .map(it => `  · [${it.category}] ${it.contents}: ${Number(it.each_price).toLocaleString()}원 × ${it.qty}수량 × ${it.day}일`)
       .join('\n')
-    return `[유사사례${i + 1}] "${q.project_title}" — 최종 ${Number(q.final_amount).toLocaleString()}원 (수주)\n${rows}`
+    const label = lowSim
+      ? '최근 수주 사례 (직접 유사하진 않음, 가격 감각 참고용)'
+      : q.status === '수주' ? '수주 성공' : '미수주 (이 가격 구성으로는 성사되지 않았음)'
+    return `[사례${i + 1}] "${q.project_title}" : 최종 ${Number(q.final_amount).toLocaleString()}원 (${label})\n${rows}`
   }).join('\n\n')
+
+  const feedbackDesc = (feedbackCases || []).map((f, i) => {
+    const head = f.video_type ? `(${f.video_type}) ` : ''
+    const desc = (f.description || '').slice(0, 80)
+    const totals = (f.ai_total != null && f.final_total != null)
+      ? ` / AI 초안 ${Number(f.ai_total).toLocaleString()}원 → 확정 ${Number(f.final_total).toLocaleString()}원`
+      : ''
+    return `[수정사례${i + 1}] ${head}"${desc}"${totals}\n  수정 내용: ${f.diff_summary || '수정 없음 (초안 그대로 채택)'}`
+  }).join('\n')
 
   return `당신은 루나모 영상 프로덕션의 견적 AI 어시스턴트입니다.
 루나모는 부산 기반 영상 제작사로 기업홍보, 다큐, 광고, SNS 콘텐츠 등을 제작합니다.
+목표: 대표가 직접 짠 것과 구분되지 않는 수준의 현실적인 견적 초안.
 
 ## 의뢰 내용 분석 가이드라인
 
-### 1. 영상 종류 (video_type) — 반드시 분류
+### 1. 영상 종류 (video_type)
 - "홍보" : 기업/기관 일반 홍보영상 (3분 내외, 인터뷰+B-roll 위주)
 - "광고" : TVC·온라인 광고 (15~60초, 모델·세트·연출 비중 ↑)
 - "다큐" : 다큐멘터리·캠페인 (5~15분, 인터뷰·자막·번역 ↑)
@@ -93,7 +186,7 @@ const buildSystemPrompt = (allItems, similarQuotes) => {
 - "인터뷰" : 인터뷰 위주 (긴 인터뷰 + 짧은 B-roll)
 - "제품영상" : 제품 소개·언박싱 (1~2분, 클로즈업·CG 위주)
 
-### 2. 결과물 스펙 (deliverables) — 가로/세로/길이/편수 분리
+### 2. 결과물 스펙 (deliverables) : 가로/세로/길이/편수 분리
 - 가로(16:9) 본편과 세로(9:16) 쇼츠는 별도 편집 공수 필요
 - 예: 본편 3분 1편 + 쇼츠 30초 2편이면 deliverables 항목 2개
 
@@ -109,57 +202,49 @@ const buildSystemPrompt = (allItems, similarQuotes) => {
 - locations: 장소 수 (다중 장소면 차량대여·진행비 ↑)
 - requires_drone, requires_cg, is_outdoor 추론
 
-### 5. 예산 처리 (가장 중요)
-- budget_total, budget_includes_vat 추출
+### 5. 예산 처리
+- budget_total(원 단위 숫자, 예: 500만원 → 5000000), budget_includes_vat 추출
 - budget_priority: "strict" (절대 초과 금지) / "flexible" (±10%) / "quality_first" (품질 우선)
   - 공공기관·정부지원사업·"예산 X원으로" 같은 표현 → strict
   - "X원 정도" → flexible
-- **budget_total이 있으면**, 합계가 정확히 그 예산에 맞도록 항목별 price·day·qty를 조정
-  - budget_includes_vat=true → sum × 1.1 = budget_total → sum = budget_total / 1.1
-  - budget_includes_vat=false → sum = budget_total
-- 가격을 만원 단위로 떨어지게 조정 (절사 후 부가세 포함이 budget_total과 일치하도록)
+- 정확한 합계 일치는 시스템이 자동 처리하므로 산수에 집착하지 말 것.
+  당신의 역할은 예산 규모에 맞는 **항목 구성과 상대적 비중**을 잡는 것.
+  합계(price×qty×day의 총합, 부가세 별도 기준)가 예산 공급가 대비 ±15% 이내면 충분함.
 
 ### 6. 긴급도 (deadline_weeks)
 - 2주 이하면 긴급 → 인건비·진행비 +15~20%
 
-### 7. 메모 자동 생성 (memo)
-- 견적서 하단에 들어갈 텍스트
-- 예: "※ 최종 결과물\n- 바이럴 영상 (가로 3분 1편)\n- 쇼츠(릴스)용 세로 영상 30초 2편"
-- deliverables 기반으로 자동 생성
+### 7. 항목별 근거 (basis)
+- 각 항목의 basis에 그 금액·일수를 잡은 이유를 한 문장으로 (예: "3분 본편 기준 편집 6일, 사례1과 동일 단가")
+
+### 8. 확인 질문 (clarifying_questions)
+- 견적 금액에 큰 영향을 주는 핵심 변수(예산, 촬영일수, 영상 분량/편수, 인터뷰 유무, 마감)가
+  의뢰문에서 파악되지 않으면 최대 3개까지 질문을 생성. 각 질문에 선택지 2~4개 포함.
+- 정보가 충분하면 빈 배열. 사소한 것은 묻지 말 것.
+- 질문이 있어도 items는 최선의 추정으로 반드시 채울 것 (사용자가 질문을 건너뛸 수 있음).
+- 사용자 답변이 이미 제공된 재분석 요청이면 clarifying_questions는 빈 배열로.
+
+### 9. 메모 자동 생성 (memo)
+- 견적서 하단에 들어갈 텍스트, deliverables 기반
+- 예: "※ 최종 결과물\\n- 바이럴 영상 (가로 3분 1편)\\n- 쇼츠(릴스)용 세로 영상 30초 2편"
 
 ## 사용 가능한 항목 목록
 ${itemsDesc}
 
-${examplesDesc ? `## 의뢰 내용과 유사한 과거 수주 사례 (가격 구조를 강하게 따를 것)\n${examplesDesc}\n` : ''}
+${examplesDesc ? `## 과거 견적 사례 (수주 사례의 가격 구조를 강하게 따를 것)\n${examplesDesc}\n` : ''}
+${feedbackDesc ? `## 과거 AI 초안을 대표가 수정한 기록 (대표의 가격 감각, 같은 실수를 반복하지 말 것)\n${feedbackDesc}\n` : ''}
 ## 응답 규칙
-- 반드시 JSON 형식만 응답 (코드블록·설명 없이 순수 JSON)
-- 실제로 필요한 항목만 포함 (price·day·qty가 0이면 제외)
-- day·qty는 양의 정수, price는 만원 단위로 떨어지는 숫자
-- 항목 목록에 없는 경우 적절한 cat·sub로 추가 (cat은 'Pre-production'/'production'/'Post-production'/'기타' 중 하나)
-- note: 산정 근거 + 예산 적용 방식 + 긴급도 반영 여부
-
-## 응답 형식 (모든 필드 필수, 정보 없으면 null/빈문자열/false)
-{
-  "project_title": "프로젝트명",
-  "client_name": "거래처명",
-  "video_type": "홍보",
-  "deliverables": [{"ratio":"16:9","duration":"3분","count":1}, {"ratio":"9:16","duration":"30초","count":2}],
-  "shoot_days": 1,
-  "interviewees": 0,
-  "locations": 1,
-  "requires_drone": false,
-  "requires_cg": false,
-  "is_outdoor": false,
-  "deadline_weeks": null,
-  "budget_total": 5000000,
-  "budget_includes_vat": true,
-  "budget_priority": "strict",
-  "items": [{"cat":"Pre-production","sub":"기획","name":"기획료","day":2,"qty":1,"price":300000}],
-  "memo": "※ 최종 결과물\\n- 바이럴 영상 (가로)\\n- 쇼츠(릴스)용 세로 영상",
-  "note": "분석 근거..."
-}`
+- 실제로 필요한 항목만 포함 (불필요한 항목을 채우지 말 것)
+- day·qty는 양의 정수, price는 만원 단위
+- 항목 목록에 없는 작업이 필요하면 적절한 cat·sub로 추가
+- note: 전체 산정 근거 요약 (2~4문장, 예산·긴급도 반영 여부 포함)
+- 정보가 없는 필드는 빈 문자열/0/false/null
+- 텍스트에 대시가 필요하면 하이픈(-)만 사용`
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// 서버 API 호출
+// ─────────────────────────────────────────────────────────────────────
 const callAnalyzeApi = async (system, userContent) => {
   const { data: { session } } = await supabase.auth.getSession()
   if (!session) throw new Error('로그인이 필요합니다')
@@ -173,46 +258,66 @@ const callAnalyzeApi = async (system, userContent) => {
     body: JSON.stringify({ system, userContent }),
   })
   if (!res.ok) {
+    if (res.status === 504) throw new Error('분석 시간이 초과되었습니다. 잠시 후 다시 시도해주세요.')
     const err = await res.json().catch(() => ({}))
     throw new Error(err.error || `API 오류 (${res.status})`)
   }
   const { text } = await res.json()
+  try {
+    return JSON.parse(text)
+  } catch { /* 아래 방어적 파싱으로 진행 */ }
   const match = (text || '').match(/\{[\s\S]*\}/)
-  if (!match) throw new Error('AI 응답을 파싱할 수 없습니다')
-  return JSON.parse(match[0])
+  if (!match) throw new Error('AI 응답을 파싱할 수 없습니다. 다시 시도해주세요.')
+  try {
+    return JSON.parse(match[0])
+  } catch {
+    throw new Error('AI 응답이 불완전합니다. 다시 시도해주세요.')
+  }
 }
 
-export const analyzeQuoteRequest = async (description, pastQuotes = [], allItems = []) => {
+// ─────────────────────────────────────────────────────────────────────
+// AI 견적 분석 (메인 진입점)
+// opts.answers: [{ question, answer }] - 확인 질문에 대한 사용자 답변 (재분석)
+// ─────────────────────────────────────────────────────────────────────
+export const analyzeQuoteRequest = async (description, pastQuotes = [], allItems = [], opts = {}) => {
   const similarQuotes = pickSimilarQuotes(description, pastQuotes, 3)
-  const system = buildSystemPrompt(allItems, similarQuotes)
 
-  // 1차 호출
-  let result = await callAnalyzeApi(system, `다음 프로젝트 의뢰 내용을 분석하여 가견적을 산출해주세요:\n\n${description}`)
+  // 피드백 사례 (실패해도 분석은 계속)
+  let feedbackCases = []
+  try {
+    feedbackCases = await fetchQuoteFeedback(4)
+  } catch (e) {
+    console.warn('[AI 견적] 피드백 사례 로드 실패:', e.message)
+  }
 
-  // 2차 검증·재조정 (예산 strict + 5% 이상 어긋날 때)
-  if (result.budget_total && result.items && result.budget_priority !== 'quality_first') {
-    const sum = calcResultSum(result.items)
-    const target = result.budget_includes_vat
-      ? Math.round(result.budget_total / 1.1)
-      : result.budget_total
-    const diff = Math.abs(sum - target) / target
-    const tolerance = result.budget_priority === 'strict' ? 0.03 : 0.10
-    if (diff > tolerance) {
-      try {
-        const reconciled = await callAnalyzeApi(system,
-          `이전 응답의 합계가 ${sum.toLocaleString()}원인데 목표 합계(부가세 ${result.budget_includes_vat ? '포함' : '별도'} ${result.budget_total.toLocaleString()}원 기준)는 ${target.toLocaleString()}원입니다. ` +
-          `항목 구성은 유지하되 price·day·qty를 조정해서 합계가 ${target.toLocaleString()}원에 ±${Math.round(tolerance*100)}% 이내가 되도록 재산출해주세요. ` +
-          `이전 응답의 다른 필드(project_title, client_name, video_type, deliverables, memo, note 등)는 그대로 유지하세요.\n\n원래 의뢰 내용:\n${description}\n\n이전 응답:\n${JSON.stringify(result)}`)
-        // 재조정 결과의 items만 채택, 다른 필드는 원본 유지
-        if (reconciled.items && reconciled.items.length) {
-          result = { ...result, items: reconciled.items, note: (result.note || '') + ' (예산 일치 재조정 적용)' }
-        }
-      } catch (e) {
-        // 재조정 실패해도 1차 결과 사용
-        console.warn('[AI 견적] 예산 재조정 실패:', e.message)
-      }
+  const system = buildSystemPrompt(allItems, similarQuotes, feedbackCases)
+
+  let userContent = `다음 프로젝트 의뢰 내용을 분석하여 가견적을 산출해주세요:\n\n${description}`
+  if (opts.answers?.length) {
+    const answersText = opts.answers
+      .filter(a => (a.answer || '').trim())
+      .map(a => `Q. ${a.question}\nA. ${a.answer}`)
+      .join('\n')
+    userContent += `\n\n## 확인 질문에 대한 사용자 답변 (반영해서 재산출, 추가 질문 금지)\n${answersText}`
+  }
+
+  const result = await callAnalyzeApi(system, userContent)
+
+  // 예산 맞춤은 코드가 처리 (quality_first는 예산보다 품질 우선이므로 제외)
+  if (result.budget_total && result.items?.length && result.budget_priority !== 'quality_first') {
+    const { items, adjusted, expectedFinal } = fitItemsToBudget(
+      result.items, result.budget_total, result.budget_includes_vat,
+    )
+    if (adjusted) {
+      result.items = items
+      result.note = (result.note || '')
+        + ` (예산 ${Number(result.budget_total).toLocaleString()}원${result.budget_includes_vat ? ' VAT포함' : ''} 기준,`
+        + ` 견적 최종금액 ${expectedFinal.toLocaleString()}원으로 자동 조정)`
     }
   }
+
+  // 재분석(답변 반영)에서는 질문을 다시 받지 않음
+  if (opts.answers?.length) result.clarifying_questions = []
 
   return result
 }

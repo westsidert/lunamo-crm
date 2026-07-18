@@ -1,6 +1,72 @@
-// 견적 AI 분석 — 서버사이드 (브라우저에 Anthropic 키 노출 방지)
+// 견적 AI 분석 - 서버사이드 (브라우저에 Anthropic 키 노출 방지)
 // 인증: Supabase 세션 JWT (Authorization: Bearer <access_token>)
 import { createClient } from '@supabase/supabase-js'
+
+// 견적 응답 스키마 (structured outputs) - 서버가 보관해 클라이언트-서버 버전 스큐와
+// 임의 스키마 주입을 차단. src/lib/ai.js의 파싱·후처리와 형식을 맞출 것.
+const RESPONSE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: [
+    'project_title', 'client_name', 'video_type', 'deliverables',
+    'shoot_days', 'interviewees', 'locations',
+    'requires_drone', 'requires_cg', 'is_outdoor',
+    'deadline_weeks', 'budget_total', 'budget_includes_vat', 'budget_priority',
+    'items', 'clarifying_questions', 'memo', 'note',
+  ],
+  properties: {
+    project_title: { type: 'string' },
+    client_name: { type: 'string' },
+    video_type: { enum: ['홍보', '광고', '다큐', 'SNS숏폼', '이벤트스케치', '인터뷰', '제품영상', '기타'] },
+    deliverables: {
+      type: 'array',
+      items: {
+        type: 'object', additionalProperties: false,
+        required: ['ratio', 'duration', 'count'],
+        properties: { ratio: { type: 'string' }, duration: { type: 'string' }, count: { type: 'integer' } },
+      },
+    },
+    shoot_days: { type: 'integer' },
+    interviewees: { type: 'integer' },
+    locations: { type: 'integer' },
+    requires_drone: { type: 'boolean' },
+    requires_cg: { type: 'boolean' },
+    is_outdoor: { type: 'boolean' },
+    deadline_weeks: { anyOf: [{ type: 'integer' }, { type: 'null' }] },
+    budget_total: { anyOf: [{ type: 'number' }, { type: 'null' }] },
+    budget_includes_vat: { type: 'boolean' },
+    budget_priority: { enum: ['strict', 'flexible', 'quality_first'] },
+    items: {
+      type: 'array',
+      items: {
+        type: 'object', additionalProperties: false,
+        required: ['cat', 'sub', 'name', 'day', 'qty', 'price', 'basis'],
+        properties: {
+          cat: { enum: ['Pre-production', 'production', 'Post-production', '기타'] },
+          sub: { type: 'string' },
+          name: { type: 'string' },
+          day: { type: 'integer' },
+          qty: { type: 'integer' },
+          price: { type: 'number' },
+          basis: { type: 'string' },
+        },
+      },
+    },
+    clarifying_questions: {
+      type: 'array',
+      items: {
+        type: 'object', additionalProperties: false,
+        required: ['question', 'options'],
+        properties: {
+          question: { type: 'string' },
+          options: { type: 'array', items: { type: 'string' } },
+        },
+      },
+    },
+    memo: { type: 'string' },
+    note: { type: 'string' },
+  },
+}
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end()
@@ -26,7 +92,17 @@ export default async function handler(req, res) {
   }
 
   // ── Anthropic 호출 ──
+  // adaptive thinking(다단계 추론) + structured outputs(JSON 스키마 강제)
   try {
+    const body = {
+      model: 'claude-opus-4-8',
+      max_tokens: 16000,
+      thinking: { type: 'adaptive' },
+      output_config: { format: { type: 'json_schema', schema: RESPONSE_SCHEMA } },
+      system,
+      messages: [{ role: 'user', content: userContent }],
+    }
+
     const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -34,19 +110,25 @@ export default async function handler(req, res) {
         'x-api-key': process.env.ANTHROPIC_API_KEY,
         'anthropic-version': '2023-06-01',
       },
-      body: JSON.stringify({
-        model: 'claude-opus-4-6',
-        max_tokens: 4096,
-        system,
-        messages: [{ role: 'user', content: userContent }],
-      }),
+      body: JSON.stringify(body),
     })
     if (!aiRes.ok) {
       const err = await aiRes.json().catch(() => ({}))
       return res.status(aiRes.status).json({ error: err.error?.message || `Anthropic API 오류 (${aiRes.status})` })
     }
     const data = await aiRes.json()
-    return res.status(200).json({ text: data.content?.[0]?.text || '' })
+    if (data.stop_reason === 'refusal') {
+      return res.status(422).json({ error: 'AI가 요청을 처리할 수 없습니다. 의뢰 내용을 바꿔서 다시 시도해주세요.' })
+    }
+    // thinking 블록이 앞에 올 수 있으므로 text 블록을 찾아서 반환
+    const textBlock = (data.content || []).find(b => b.type === 'text')
+    if (!textBlock?.text) {
+      const reason = data.stop_reason === 'max_tokens'
+        ? 'AI 응답이 길이 제한에 걸렸습니다'
+        : 'AI 응답이 비어 있습니다'
+      return res.status(502).json({ error: `${reason}. 다시 시도해주세요.` })
+    }
+    return res.status(200).json({ text: textBlock.text })
   } catch (e) {
     return res.status(500).json({ error: e.message })
   }

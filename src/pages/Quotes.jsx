@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { getQuotes, createQuote, updateQuote, deleteQuote, getClients, createProjectFromQuote } from '../lib/api'
 import { formatKRW } from '../lib/utils'
 import { analyzeQuoteRequest, matchClient, getLogo, getStamp, setLogo, setStamp } from '../lib/ai'
+import { saveQuoteAiFeedback } from '../lib/aiFeedback'
 import { supabase } from '../lib/supabase'
 import { downloadCsvRows } from '../lib/csv'
 
@@ -178,7 +179,7 @@ export default function Quotes() {
     items: (q.quote_items || []).sort((a, b) => a.sort_order - b.sort_order),
   })
 
-  const handleSave = async ({ meta, values, customItems, discount, id }) => {
+  const handleSave = async ({ meta, values, customItems, discount, id, aiDraft }) => {
     const regularSelected = ALL_ITEMS
       .filter(item => calcItemSum(values[itemKey(item)] || {}) > 0)
       .map(item => {
@@ -197,8 +198,20 @@ export default function Quotes() {
       sub_total: subTotal, total_with_vat: totalWithVat, final_amount: finalAmount,
       is_first_deal: discount.is_first_deal, discount_rate: discount.discount_rate,
     }
-    if (id) await updateQuote(id, { ...payload, items: selectedItems })
-    else    await createQuote({ ...payload, items: selectedItems })
+    if (id) {
+      await updateQuote(id, { ...payload, items: selectedItems })
+    } else {
+      const created = await createQuote({ ...payload, items: selectedItems })
+      // AI 초안으로 시작한 견적이면 초안 vs 확정본을 기록 (다음 분석의 학습 사례)
+      if (aiDraft) {
+        saveQuoteAiFeedback({
+          quoteId: created.id,
+          description: aiDraft.description,
+          aiResult: aiDraft.result,
+          finalItems: selectedItems,
+        }).catch(e => console.warn('[AI 피드백] 저장 실패:', e.message))
+      }
+    }
     await loadAll()
     setEditing(null)
   }
@@ -345,10 +358,76 @@ function QuoteWizard({ initial, clients, pastQuotes = [], onClose, onSave }) {
   // ── Step 0: AI 분석 상태 ──
   const [aiDesc, setAiDesc]         = useState('')
   const [aiLoading, setAiLoading]   = useState(false)
-  const [aiNote, setAiNote]         = useState('')
   const [aiError, setAiError]       = useState('')
+  const [aiQuestions, setAiQuestions] = useState([])   // AI 확인 질문
+  const [aiAnswers, setAiAnswers]   = useState({})     // 질문 인덱스 → 답변
+  const [pendingResult, setPendingResult] = useState(null) // 질문 대기 중인 1차 결과
+  const [aiDraft, setAiDraft]       = useState(null)   // 피드백 기록용 {description, result}
+  const [showBasis, setShowBasis]   = useState(false)
+
+  // Step1 표시용 요약 (aiDraft에서 파생)
+  const aiSummary = useMemo(() => {
+    if (!aiDraft) return null
+    const r = aiDraft.result
+    return {
+      note: r.note || '',
+      items: (r.items || []).filter(it => it.basis).map(it => ({ name: it.name, basis: it.basis })),
+    }
+  }, [aiDraft])
+
+  const hasAnswer = Object.values(aiAnswers).some(v => (v || '').trim())
 
   const setMeta_ = (k, v) => setMeta(m => ({ ...m, [k]: v }))
+
+  // AI 결과를 폼에 반영하고 Step 1로 이동
+  const applyAiResult = (result) => {
+    if (!result) return
+    if (result.project_title) setMeta_('project_title', result.project_title)
+    if (result.client_name) {
+      const matched = matchClient(result.client_name, clients)
+      if (matched) {
+        setMeta_('client_id', matched.id)
+        setMeta_('client_name_override', '')
+      } else {
+        setMeta_('client_id', '')
+        setMeta_('client_name_override', result.client_name)
+      }
+    }
+    // 함수형 업데이트: 분석 대기 중 바뀐 최신 memo 기준으로 판정 (stale closure 방지)
+    if (result.memo) setMeta(m => (m.memo ? m : { ...m, memo: result.memo }))
+    const newValues = initValues()
+    const newCustom = []
+    ;(result.items || []).forEach(item => {
+      const match = ALL_ITEMS.find(a => a.name === item.name && a.cat === item.cat)
+      if (match) {
+        newValues[itemKey(match)] = { day: item.day, qty: item.qty, price: item.price ?? match.price, nameOverride: '' }
+      } else {
+        newCustom.push({ _id: Math.random(), cat: item.cat || '기타', name: item.name, day: item.day, qty: item.qty, price: item.price ?? 0 })
+      }
+    })
+    setValues(newValues)
+    setCustomItems(newCustom)
+    setAiDraft({ description: aiDesc, result })
+    setAiQuestions([])
+    setPendingResult(null)
+    setOnlyFilled(true)
+    setStep(1)
+  }
+
+  // 확인 질문 답변 반영 재분석
+  const refineWithAnswers = async () => {
+    setAiError(''); setAiLoading(true)
+    try {
+      const answers = aiQuestions
+        .map((q, qi) => ({ question: q.question, answer: (aiAnswers[qi] || '').trim() }))
+        .filter(a => a.answer)
+      const result = await analyzeQuoteRequest(aiDesc, pastQuotes, ALL_ITEMS, { answers })
+      applyAiResult(result)
+    } catch (e) {
+      setAiError('재분석 실패: ' + e.message)
+    }
+    setAiLoading(false)
+  }
   const setVal   = (key, field, v) => setValues(prev => ({ ...prev, [key]: { ...prev[key], [field]: v } }))
 
   // 소요일/수량 일괄 ±1 (현재 값이 0보다 큰 행만 대상)
@@ -381,7 +460,7 @@ function QuoteWizard({ initial, clients, pastQuotes = [], onClose, onSave }) {
 
   const handleSave = async () => {
     setSaving(true)
-    try { await onSave({ meta, values, customItems, discount, id: initial.id }) }
+    try { await onSave({ meta, values, customItems, discount, id: initial.id, aiDraft }) }
     catch (e) { alert('저장 실패: ' + e.message) }
     setSaving(false)
   }
@@ -464,12 +543,54 @@ function QuoteWizard({ initial, clients, pastQuotes = [], onClose, onSave }) {
                 </div>
               )}
 
-              {/* AI 분석 결과 노트 */}
-              {aiNote && (
-                <div style={{ background: '#f3f0ff', border: '1px solid #c4b5fd', borderRadius: 8, padding: '12px 16px', marginBottom: 16 }}>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: '#7c3aed', marginBottom: 4 }}>✦ AI 분석 결과</div>
-                  <div style={{ fontSize: 13, color: '#4c1d95', lineHeight: 1.7 }}>{aiNote}</div>
-                  <div style={{ fontSize: 12, color: '#7c3aed', marginTop: 8 }}>→ 산출 양식에 항목이 자동 기입되었습니다. 다음 단계에서 확인·수정하세요.</div>
+              {/* AI 확인 질문 */}
+              {aiQuestions.length > 0 && (
+                <div style={{ background: '#f3f0ff', border: '1px solid #c4b5fd', borderRadius: 10, padding: '16px 18px', marginBottom: 16 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: '#7c3aed', marginBottom: 4 }}>✦ 견적 정확도를 위해 몇 가지만 확인할게요</div>
+                  <div style={{ fontSize: 12, color: '#8b5cf6', marginBottom: 14 }}>
+                    답할수록 정확해집니다. 모르셔도 괜찮아요. "이대로 진행"을 누르면 AI 추정치로 계속합니다.
+                  </div>
+                  {aiQuestions.map((q, qi) => {
+                    const isCustom = (aiAnswers[qi] || '') && !(q.options || []).includes(aiAnswers[qi])
+                    return (
+                      <div key={qi} style={{ marginBottom: 14 }}>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: '#4c1d95', marginBottom: 7 }}>{qi + 1}. {q.question}</div>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                          {(q.options || []).map(opt => {
+                            const active = aiAnswers[qi] === opt
+                            return (
+                              <button key={opt} type="button"
+                                onClick={() => setAiAnswers(a => ({ ...a, [qi]: active ? '' : opt }))}
+                                style={{
+                                  padding: '5px 13px', borderRadius: 20, fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                                  border: `1.5px solid ${active ? '#7c3aed' : '#ddd6fe'}`,
+                                  background: active ? '#7c3aed' : '#fff',
+                                  color: active ? '#fff' : '#7c3aed',
+                                }}>{opt}</button>
+                            )
+                          })}
+                          <input
+                            value={isCustom ? aiAnswers[qi] : ''}
+                            onChange={e => setAiAnswers(a => ({ ...a, [qi]: e.target.value }))}
+                            placeholder="직접 입력"
+                            style={{ padding: '5px 12px', borderRadius: 20, fontSize: 12, border: '1.5px solid #ddd6fe', outline: 'none', width: 140, color: '#4c1d95' }}
+                          />
+                        </div>
+                      </div>
+                    )
+                  })}
+                  <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 6 }}>
+                    <button type="button" onClick={() => applyAiResult(pendingResult)} disabled={aiLoading}
+                      style={{ ...btnCancel, fontSize: 13 }}>
+                      이대로 진행 (추정치 사용)
+                    </button>
+                    <button type="button" onClick={refineWithAnswers}
+                      disabled={aiLoading || !hasAnswer}
+                      style={{ ...btnPrimary, background: '#7c3aed', fontSize: 13,
+                        opacity: (aiLoading || !hasAnswer) ? 0.6 : 1 }}>
+                      {aiLoading ? '재분석 중...' : '답변 반영해 재분석 →'}
+                    </button>
+                  </div>
                 </div>
               )}
 
@@ -481,40 +602,18 @@ function QuoteWizard({ initial, clients, pastQuotes = [], onClose, onSave }) {
                 <button
                   onClick={async () => {
                     if (!aiDesc.trim()) { setAiError('의뢰 내용을 입력해주세요'); return }
-                    setAiError(''); setAiLoading(true); setAiNote('')
+                    setAiError(''); setAiLoading(true)
+                    setAiQuestions([]); setPendingResult(null)
                     try {
                       const result = await analyzeQuoteRequest(aiDesc, pastQuotes, ALL_ITEMS)
-                      // 프로젝트명 자동 입력
-                      if (result.project_title) setMeta_('project_title', result.project_title)
-                      // 거래처: DB에 있는 거래처면 client_id로, 없으면 직접입력 필드로
-                      if (result.client_name) {
-                        const matched = matchClient(result.client_name, clients)
-                        if (matched) {
-                          setMeta_('client_id', matched.id)
-                          setMeta_('client_name_override', '')
-                        } else {
-                          setMeta_('client_id', '')
-                          setMeta_('client_name_override', result.client_name)
-                        }
+                      if (result.clarifying_questions?.length) {
+                        // 핵심 정보가 부족 → 질문 먼저 (결과는 보류, 건너뛰기 가능)
+                        setPendingResult(result)
+                        setAiQuestions(result.clarifying_questions)
+                        setAiAnswers({})
+                      } else {
+                        applyAiResult(result)
                       }
-                      // 메모 자동 입력 (사용자가 비워둔 경우만)
-                      if (result.memo && !meta.memo) setMeta_('memo', result.memo)
-                      // 결과를 values에 반영
-                      const newValues = initValues()
-                      const newCustom = []
-                      result.items.forEach(item => {
-                        const match = ALL_ITEMS.find(a => a.name === item.name && a.cat === item.cat)
-                        if (match) {
-                          newValues[itemKey(match)] = { day: item.day, qty: item.qty, price: item.price ?? match.price, nameOverride: '' }
-                        } else {
-                          newCustom.push({ _id: Math.random(), cat: item.cat || '기타', name: item.name, day: item.day, qty: item.qty, price: item.price ?? 0 })
-                        }
-                      })
-                      setValues(newValues)
-                      setCustomItems(newCustom)
-                      setAiNote(result.note || '')
-                      setOnlyFilled(true)
-                      setStep(1)
                     } catch (e) {
                       setAiError('분석 실패: ' + e.message)
                     }
@@ -527,7 +626,7 @@ function QuoteWizard({ initial, clients, pastQuotes = [], onClose, onSave }) {
                   {aiLoading ? (
                     <>
                       <span style={{ display: 'inline-block', width: 14, height: 14, border: '2px solid #fff', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
-                      AI 분석 중...
+                      AI 분석 중... (깊은 분석, 최대 1분)
                     </>
                   ) : '✦ AI 가견적 분석'}
                 </button>
@@ -545,6 +644,36 @@ function QuoteWizard({ initial, clients, pastQuotes = [], onClose, onSave }) {
         {/* ── Step 1: 산출 양식 ── */}
         {step === 1 && (
           <div style={{ maxWidth: 1100, margin: '0 auto' }}>
+            {/* AI 분석 요약 + 항목별 근거 */}
+            {aiSummary && (
+              <div style={{ background: '#f3f0ff', border: '1px solid #c4b5fd', borderRadius: 12, padding: '14px 18px', marginBottom: 20 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: '#7c3aed' }}>✦ AI 분석 요약</div>
+                  {aiSummary.items.length > 0 && (
+                    <button type="button" onClick={() => setShowBasis(v => !v)}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, color: '#7c3aed', fontWeight: 600 }}>
+                      {showBasis ? '항목별 근거 접기 ▲' : `항목별 근거 보기 (${aiSummary.items.length}) ▼`}
+                    </button>
+                  )}
+                </div>
+                {aiSummary.note && (
+                  <div style={{ fontSize: 13, color: '#4c1d95', lineHeight: 1.7, marginTop: 6 }}>{aiSummary.note}</div>
+                )}
+                {showBasis && (
+                  <div style={{ marginTop: 10, borderTop: '1px solid #ddd6fe', paddingTop: 10 }}>
+                    {aiSummary.items.map((it, i) => (
+                      <div key={i} style={{ fontSize: 12, color: '#5b21b6', lineHeight: 1.9 }}>
+                        <b>{it.name}</b> : {it.basis}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div style={{ fontSize: 11, color: '#8b5cf6', marginTop: 8 }}>
+                  AI 초안입니다. 수정해서 저장하면 다음 분석부터 수정 스타일이 학습 사례로 반영됩니다.
+                </div>
+              </div>
+            )}
+
             {/* 기본 정보 */}
             <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e2e8f0', padding: '20px 24px', marginBottom: 20 }}>
               <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a', marginBottom: 16 }}>기본 정보</div>

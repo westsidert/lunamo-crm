@@ -10,6 +10,10 @@ export const formatDate = (d) => {
 
 export const calcVat = (supply) => Math.round(supply * 0.1)
 
+// 견적 항목 합계 (price × qty × day) - ai.js / aiFeedback.js 공용
+export const sumQuoteItems = (items) => (items || []).reduce(
+  (s, it) => s + (Number(it.price) || 0) * (Number(it.qty) || 1) * (Number(it.day) || 1), 0)
+
 export const thisYear = () => new Date().getFullYear()
 export const thisMonth = () => new Date().getMonth() + 1
 
