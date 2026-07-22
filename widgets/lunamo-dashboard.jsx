@@ -7,18 +7,23 @@ const TOKEN = '__WIDGET_TOKEN__'
 
 export const refreshFrequency = 300000 // 5분
 
-export const command = (dispatch) => {
-  fetch(`${BASE}/api/widget-stats?token=${TOKEN}`)
-    .then(r => r.json())
-    .then(data => dispatch({ type: 'FETCH_OK', data }))
-    .catch(err => dispatch({ type: 'FETCH_ERR', error: String(err) }))
-}
+// WebView의 fetch는 CORS에 막히므로 shell curl로 호출 (Übersicht 표준 방식)
+export const command = `curl -s --max-time 15 "${BASE}/api/widget-stats?token=${TOKEN}"`
 
 export const initialState = { loading: true }
 
 export const updateState = (event, prev) => {
-  if (event.type === 'FETCH_OK') return { loading: false, data: event.data }
-  if (event.type === 'FETCH_ERR') return { loading: false, error: event.error }
+  if (event.error) return { loading: false, error: String(event.error) }
+  if (typeof event.output === 'string') {
+    if (!event.output.trim()) return { loading: false, error: '응답 없음 (네트워크 확인)' }
+    try {
+      const data = JSON.parse(event.output)
+      if (data.error) return { loading: false, error: data.error }
+      return { loading: false, data }
+    } catch {
+      return { loading: false, error: '응답 파싱 실패' }
+    }
+  }
   return prev
 }
 
@@ -59,15 +64,15 @@ const Row = ({ state, label, value }) => (
 )
 
 export const render = ({ loading, error, data }) => {
-  if (loading) return <div style={card}><div style={{ fontSize: 12, color: '#64748b' }}>LUNAMO 불러오는 중...</div></div>
-  if (error || !data || data.error) {
+  if (error || (!loading && !data)) {
     return (
       <div style={card}>
         <div style={{ fontSize: 12, fontWeight: 700, color: '#f87171', marginBottom: 4 }}>LUNAMO 연결 실패</div>
-        <div style={{ fontSize: 10, color: '#64748b' }}>{data?.error || error}</div>
+        <div style={{ fontSize: 10, color: '#64748b' }}>{error || '데이터 없음'}</div>
       </div>
     )
   }
+  if (loading || !data) return <div style={card}><div style={{ fontSize: 12, color: '#64748b' }}>LUNAMO 불러오는 중...</div></div>
 
   const { month, alerts, updated_at } = data
   const a = alerts

@@ -8,6 +8,11 @@ const calcIncomeTax = (amount) => truncate10((Number(amount) || 0) * 0.03)
 const calcLocalTax = (amount) => truncate10(calcIncomeTax(amount) * 0.1)
 
 export default async function handler(req, res) {
+  // 데스크톱 위젯(WebView·로컬 스크립트)에서 직접 호출 가능하도록 허용
+  res.setHeader('Access-Control-Allow-Origin', '*')
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS')
+  if (req.method === 'OPTIONS') return res.status(204).end()
+
   const expected = process.env.WIDGET_TOKEN
   const token = req.query?.token || ''
   if (!expected || token !== expected) {
