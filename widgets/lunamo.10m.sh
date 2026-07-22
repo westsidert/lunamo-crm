@@ -11,9 +11,17 @@
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 BASE="https://lunamo-crm.vercel.app"
-TOKEN="__WIDGET_TOKEN__"
+FETCH="$HOME/Library/Application Support/lunamo-widget/lunamo-fetch.sh"
 
-JSON=$(curl -s --max-time 12 "$BASE/api/widget-stats?token=$TOKEN")
+# 강제 새로고침 (드롭다운의 '지금 새로고침' 클릭 시)
+if [ "$1" = "force" ]; then
+  bash "$FETCH" --force >/dev/null 2>&1
+  exit 0
+fi
+
+# 데이터는 lunamo-fetch.sh가 관리 (매일 오전 9시 / 오후 9시에만 서버 호출)
+JSON=$(bash "$FETCH" 2>/dev/null)
+SELF="${SWIFTBAR_PLUGIN_PATH:-$0}"
 
 if [ -z "$JSON" ] || echo "$JSON" | grep -q '"error"'; then
   echo "LUNAMO ⚠️"
@@ -24,11 +32,12 @@ if [ -z "$JSON" ] || echo "$JSON" | grep -q '"error"'; then
 fi
 
 # jq 없이 python3으로 파싱 (macOS 기본 탑재)
-python3 - "$JSON" "$BASE" <<'PY'
+python3 - "$JSON" "$BASE" "$SELF" <<'PY'
 import json, sys
 
 data = json.loads(sys.argv[1])
 base = sys.argv[2]
+me = sys.argv[3]
 m = data["month"]
 a = data["alerts"]
 
@@ -78,6 +87,7 @@ for state, label, value in rows:
     print(f"{icon[state]} {label}: {value} | size=13{color} href={base}")
 print("---")
 print(f"CRM 대시보드 열기 | href={base}")
-print(f"원천세 신고 도우미 | href={base}")
-print("새로고침 | refresh=true")
+print("---")
+print("매일 9시 / 21시 자동 갱신 | size=11 color=#94a3b8")
+print(f"지금 새로고침 | bash={me} param1=force terminal=false refresh=true")
 PY

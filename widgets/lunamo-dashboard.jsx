@@ -2,13 +2,31 @@
 // 설치: 이 파일을 ~/Library/Application Support/Übersicht/widgets/ 에 복사
 // 토큰: 아래 TOKEN 값을 본인 WIDGET_TOKEN으로 교체
 
-const BASE = 'https://lunamo-crm.vercel.app'
-const TOKEN = '__WIDGET_TOKEN__'
+// ── 위젯 위치 ─────────────────────────────────────────────────
+// 아래 PLACE 값만 바꾸면 위치가 옮겨집니다. 저장하면 즉시 반영됩니다.
+//   'left-center'  왼쪽 중앙      'right-center' 오른쪽 중앙
+//   'top-left'     왼쪽 위        'top-right'    오른쪽 위
+//   'bottom-left'  왼쪽 아래      'bottom-right' 오른쪽 아래
+// 가장자리에서 띄울 간격은 MARGIN(px)으로 조절합니다.
+const PLACE = 'left-center'
+const MARGIN = 40
+const WIDTH = 300
+// ────────────────────────────────────────────────────────────
 
-export const refreshFrequency = 300000 // 5분
+const PLACEMENTS = {
+  'top-left':      `top: ${MARGIN}px; left: ${MARGIN}px;`,
+  'top-right':     `top: ${MARGIN}px; right: ${MARGIN}px;`,
+  'bottom-left':   `bottom: ${MARGIN}px; left: ${MARGIN}px;`,
+  'bottom-right':  `bottom: ${MARGIN}px; right: ${MARGIN}px;`,
+  'left-center':   `top: 50%; left: ${MARGIN}px; transform: translateY(-50%);`,
+  'right-center':  `top: 50%; right: ${MARGIN}px; transform: translateY(-50%);`,
+}
 
-// WebView의 fetch는 CORS에 막히므로 shell curl로 호출 (Übersicht 표준 방식)
-export const command = `curl -s --max-time 15 "${BASE}/api/widget-stats?token=${TOKEN}"`
+// 데이터 갱신은 lunamo-fetch.sh가 담당 (매일 오전 9시 / 오후 9시에만 서버 호출)
+// 아래 주기는 "슬롯이 바뀌었는지" 확인하는 간격일 뿐이라 서버 부하와 무관
+export const refreshFrequency = 600000 // 10분마다 슬롯 확인
+
+export const command = `bash "$HOME/Library/Application Support/lunamo-widget/lunamo-fetch.sh"`
 
 export const initialState = { loading: true }
 
@@ -28,9 +46,8 @@ export const updateState = (event, prev) => {
 }
 
 export const className = `
-  top: 40px;
-  right: 40px;
-  width: 300px;
+  ${PLACEMENTS[PLACE] || PLACEMENTS['top-right']}
+  width: ${WIDTH}px;
   font-family: -apple-system, 'Apple SD Gothic Neo', sans-serif;
   color: #e2e8f0;
   -webkit-font-smoothing: antialiased;
@@ -151,7 +168,7 @@ export const render = ({ loading, error, data }) => {
       </div>
 
       <div style={{ fontSize: 9, color: '#475569', textAlign: 'right', marginTop: 8 }}>
-        {month.month}월 · {hh}:{mm} 갱신
+        {month.month}월 · {hh}:{mm} 기준 (매일 9시/21시 갱신)
       </div>
     </div>
   )
