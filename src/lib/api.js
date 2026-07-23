@@ -104,7 +104,7 @@ export const createProjectFromQuote = async (quote) => {
 export const getTransactions = async (filters = {}) => {
   let query = supabase
     .from('transactions')
-    .select('*, clients(name), projects(name), crew(name)')
+    .select('*, clients(name), projects(name), crew(name, account)')
     .order('transaction_date', { ascending: false })
 
   if (filters.type) query = query.eq('type', filters.type)
@@ -139,6 +139,18 @@ export const updateTransaction = async (id, tx) => {
 export const deleteTransaction = async (id) => {
   const { error } = await supabase.from('transactions').delete().eq('id', id)
   if (error) throw error
+}
+
+// 여러 거래의 결제 상태 일괄 변경
+export const updateTransactionsStatus = async (ids, payment_status) => {
+  if (!ids?.length) return []
+  const { data, error } = await supabase
+    .from('transactions')
+    .update({ payment_status })
+    .in('id', ids)
+    .select('*, clients(name), projects(name), crew(name, account)')
+  if (error) throw error
+  return data
 }
 
 export const createTransactions = async (txList) => {

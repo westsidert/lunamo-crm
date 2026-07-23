@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { getTransactions, createTransaction, createTransactions, updateTransaction, deleteTransaction, getClients, getProjects } from '../lib/api'
+import { getTransactions, createTransaction, createTransactions, updateTransaction, deleteTransaction, updateTransactionsStatus, getClients, getProjects } from '../lib/api'
 import { formatKRW, formatDate, calcVat } from '../lib/utils'
 import Modal, { FormRow, Input, Select, Textarea, FormActions } from '../components/Modal'
 import { getCrew, createCrew } from '../lib/crew'
@@ -32,6 +32,8 @@ export default function Transactions() {
   const [loading, setLoading] = useState(true)
   const [modal, setModal] = useState(null)
   const [filter, setFilter] = useState({ type: '', client_id: '', period: '' })
+  const [selected, setSelected] = useState(new Set())
+  const [bulkLoading, setBulkLoading] = useState(false)
 
   useEffect(() => { loadAll() }, [])
 
@@ -66,6 +68,46 @@ export default function Transactions() {
   const totalLabor    = filtered.filter(t => t.type === '외주인건비').reduce((s, t) => s + Number(t.supply_amount), 0)
   const profit        = totalSales - totalPurchase - totalLabor
 
+  // ── 선택 (일괄 상태 변경) ──────────────────────────
+  // 필터가 바뀌면 화면에서 사라진 선택 항목은 정리
+  const filteredIds = filtered.map(t => t.id)
+  const selectedInView = filtered.filter(t => selected.has(t.id))
+  const allSelected = filtered.length > 0 && selectedInView.length === filtered.length
+  const toggleOne = (id) => setSelected(prev => {
+    const next = new Set(prev)
+    next.has(id) ? next.delete(id) : next.add(id)
+    return next
+  })
+  const toggleAll = () => setSelected(prev => {
+    if (filtered.every(t => prev.has(t.id))) {
+      const next = new Set(prev); filteredIds.forEach(id => next.delete(id)); return next
+    }
+    return new Set([...prev, ...filteredIds])
+  })
+  const clearSelection = () => setSelected(new Set())
+
+  // 선택 항목 중 특정 상태로 바꿀 수 있는 건들 (매출=미수금→수금완료 / 매입·인건비=미지급→지급완료)
+  const bulkTargets = (toStatus) => {
+    const fromStatus = toStatus === '수금완료' ? '미수금' : '미지급'
+    return selectedInView.filter(t => t.payment_status === fromStatus)
+  }
+  const applyBulk = async (toStatus) => {
+    const targets = bulkTargets(toStatus)
+    if (targets.length === 0) return
+    setBulkLoading(true)
+    try {
+      const ids = targets.map(t => t.id)
+      const updated = await updateTransactionsStatus(ids, toStatus)
+      const map = new Map(updated.map(u => [u.id, u]))
+      setTransactions(prev => prev.map(t => map.get(t.id) || t))
+      setSelected(prev => { const next = new Set(prev); ids.forEach(id => next.delete(id)); return next })
+    } catch (e) { alert('상태 변경 실패: ' + e.message) }
+    setBulkLoading(false)
+  }
+
+  // 미지급 외주인건비 입금 목록 (동일인 합산)
+  const openPayoutList = () => setModal('payout-list')
+
   return (
     <div style={{ padding: isMobile ? '18px 14px' : '28px 32px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24, flexWrap: 'wrap', gap: 10 }}>
@@ -75,6 +117,7 @@ export default function Transactions() {
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button onClick={exportCsv} style={{ ...btnPrimary, background: '#fff', color: '#475569', border: '1px solid #e2e8f0' }}>⤓ 엑셀(CSV)</button>
+          <button onClick={openPayoutList} style={{ ...btnPrimary, background: '#fff', color: '#7c3aed', border: '1px solid #c4b5fd' }}>💸 인력 입금 목록</button>
           <button onClick={() => setModal('labor-batch')} style={{ ...btnPrimary, background: '#7c3aed' }}>👥 외주인건비 일괄입력</button>
           <button onClick={() => setModal('create')} style={btnPrimary}>+ 거래 등록</button>
         </div>
@@ -129,11 +172,49 @@ export default function Transactions() {
         })}
       </div>
 
+      {/* 일괄 작업 바 (선택 시 노출) */}
+      {selectedInView.length > 0 && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+          background: '#0f172a', borderRadius: 12, padding: '12px 18px', marginBottom: 12,
+        }}>
+          <span style={{ color: '#e2e8f0', fontSize: 14, fontWeight: 700 }}>{selectedInView.length}건 선택됨</span>
+          {(() => {
+            const su = bulkTargets('수금완료').length
+            const ji = bulkTargets('지급완료').length
+            return (
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {su > 0 && (
+                  <button onClick={() => applyBulk('수금완료')} disabled={bulkLoading} style={{ ...btnBulk, background: '#16a34a' }}>
+                    수금완료로 변경 ({su})
+                  </button>
+                )}
+                {ji > 0 && (
+                  <button onClick={() => applyBulk('지급완료')} disabled={bulkLoading} style={{ ...btnBulk, background: '#7c3aed' }}>
+                    지급완료로 변경 ({ji})
+                  </button>
+                )}
+                {su === 0 && ji === 0 && (
+                  <span style={{ color: '#94a3b8', fontSize: 12 }}>선택 항목이 모두 완료 상태입니다</span>
+                )}
+              </div>
+            )
+          })()}
+          <button onClick={clearSelection} style={{ ...btnBulk, background: 'none', border: '1px solid #475569', color: '#cbd5e1', marginLeft: 'auto' }}>
+            선택 해제
+          </button>
+        </div>
+      )}
+
       {/* Table */}
       <div style={{ background: '#fff', borderRadius: 14, border: '1px solid #e2e8f0', overflow: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
           <thead>
             <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
+              <th style={{ padding: '11px 14px', width: 36 }}>
+                <input type="checkbox" checked={allSelected} onChange={toggleAll}
+                  title="전체 선택" style={{ width: 15, height: 15, cursor: 'pointer' }} />
+              </th>
               {['유형','날짜','거래처/프리랜서','프로젝트','항목','금액','세금','실지급/합계','증빙','상태','메모',''].map(h => (
                 <th key={h} style={{ padding: '11px 14px', textAlign: 'left', fontSize: 12, color: '#64748b', fontWeight: 600, whiteSpace: 'nowrap' }}>{h}</th>
               ))}
@@ -141,17 +222,22 @@ export default function Transactions() {
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={12} style={{ textAlign: 'center', padding: 40, color: '#94a3b8' }}>불러오는 중...</td></tr>
+              <tr><td colSpan={13} style={{ textAlign: 'center', padding: 40, color: '#94a3b8' }}>불러오는 중...</td></tr>
             ) : filtered.length === 0 ? (
-              <tr><td colSpan={12} style={{ textAlign: 'center', padding: 40, color: '#94a3b8', fontSize: 13 }}>거래 내역이 없습니다</td></tr>
+              <tr><td colSpan={13} style={{ textAlign: 'center', padding: 40, color: '#94a3b8', fontSize: 13 }}>거래 내역이 없습니다</td></tr>
             ) : filtered.map(tx => {
               const isLabor = tx.type === '외주인건비'
               const ts = TYPE_STYLE[tx.type] || TYPE_STYLE['매입']
               const netPay = isLabor ? Number(tx.supply_amount) - Number(tx.withholding_tax || 0) : null
+              const isSel = selected.has(tx.id)
               return (
-                <tr key={tx.id} style={{ borderBottom: '1px solid #f1f5f9' }}
-                  onMouseEnter={e => e.currentTarget.style.background = '#fafafa'}
-                  onMouseLeave={e => e.currentTarget.style.background = ''}>
+                <tr key={tx.id} style={{ borderBottom: '1px solid #f1f5f9', background: isSel ? '#f5f3ff' : '' }}
+                  onMouseEnter={e => { if (!isSel) e.currentTarget.style.background = '#fafafa' }}
+                  onMouseLeave={e => { if (!isSel) e.currentTarget.style.background = '' }}>
+                  <td style={{ padding: '11px 14px', textAlign: 'center' }}>
+                    <input type="checkbox" checked={isSel} onChange={() => toggleOne(tx.id)}
+                      style={{ width: 15, height: 15, cursor: 'pointer' }} />
+                  </td>
                   <td style={{ padding: '11px 14px' }}>
                     <span style={{ padding: '2px 8px', borderRadius: 20, fontSize: 12, fontWeight: 600, background: ts.bg, color: ts.color }}>
                       {tx.type}
@@ -213,7 +299,15 @@ export default function Transactions() {
         />
       )}
 
-      {modal && modal !== 'labor-batch' && (
+      {modal === 'payout-list' && (
+        <PayoutListModal
+          transactions={transactions}
+          crew={crew}
+          onClose={() => setModal(null)}
+        />
+      )}
+
+      {modal && modal !== 'labor-batch' && modal !== 'payout-list' && (
         <TransactionModal
           tx={modal === 'create' ? EMPTY : modal}
           clients={clients}
@@ -760,6 +854,87 @@ function SumCard({ label, value, color }) {
   )
 }
 
+// ── 미지급 인력 입금 목록 (동일인 합산, 복사용 텍스트) ────────────────
+function PayoutListModal({ transactions, crew, onClose }) {
+  const [copied, setCopied] = useState(false)
+
+  // 미지급 외주인건비를 인력별로 합산 (crew_id 우선, 없으면 이름으로)
+  const people = (() => {
+    const accountOf = (name) => crew.find(c => c.name === name)?.account || ''
+    const map = new Map()
+    transactions
+      .filter(t => t.type === '외주인건비' && t.payment_status === '미지급')
+      .forEach(t => {
+        const name = t.crew?.name || (t.item || '').split(' (')[0].trim() || '(이름없음)'
+        const key = t.crew_id || `name:${name}`
+        const net = Number(t.supply_amount) - Number(t.withholding_tax || 0)
+        if (!map.has(key)) map.set(key, { name, account: t.crew?.account || accountOf(name), net: 0, count: 0 })
+        const p = map.get(key)
+        p.net += net
+        p.count += 1
+      })
+    return [...map.values()].sort((a, b) => b.net - a.net)
+  })()
+
+  const total = people.reduce((s, p) => s + p.net, 0)
+  // 복사용 텍스트: 이름  금액  계좌
+  const text = people
+    .map(p => `${p.name}  ${formatKRW(p.net)}원  ${p.account || '(계좌 미등록)'}`)
+    .join('\n')
+
+  const copyAll = async () => {
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch { alert('복사 실패 - 텍스트를 직접 드래그해 복사해주세요') }
+  }
+
+  const noAccount = people.filter(p => !p.account).length
+
+  return (
+    <Modal title="💸 인력 입금 목록 (미지급)" onClose={onClose} width={560}>
+      {people.length === 0 ? (
+        <div style={{ padding: '30px 0', textAlign: 'center', color: '#94a3b8', fontSize: 14 }}>
+          미지급 상태인 외주인건비가 없습니다.
+        </div>
+      ) : (
+        <>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
+            <div style={{ fontSize: 13, color: '#64748b' }}>
+              {people.length}명 · 실지급액 합계 <b style={{ color: '#0f172a' }}>{formatKRW(total)}원</b>
+            </div>
+            <button onClick={copyAll} style={{
+              padding: '8px 18px', borderRadius: 8, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600,
+              background: copied ? '#16a34a' : '#7c3aed', color: '#fff',
+            }}>
+              {copied ? '✓ 복사됨' : '전체 복사'}
+            </button>
+          </div>
+
+          <textarea
+            readOnly
+            value={text}
+            onFocus={e => e.target.select()}
+            style={{
+              width: '100%', minHeight: Math.min(320, 40 + people.length * 24), boxSizing: 'border-box',
+              padding: '14px 16px', borderRadius: 10, border: '1px solid #e2e8f0',
+              fontSize: 14, lineHeight: 1.9, color: '#1e293b', fontFamily: 'monospace',
+              resize: 'vertical', background: '#f8fafc', outline: 'none',
+            }}
+          />
+
+          <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 10, lineHeight: 1.6 }}>
+            · 금액은 원천세 공제 후 실지급액 기준입니다. 같은 사람의 여러 건은 합산됩니다.<br />
+            · 계좌는 인력 관리에 등록된 정보입니다.
+            {noAccount > 0 && <span style={{ color: '#dc2626' }}> 계좌 미등록 {noAccount}명 - 인력 페이지에서 등록하세요.</span>}
+          </div>
+        </>
+      )}
+    </Modal>
+  )
+}
+
 const paymentStyle = (s) => {
   const map = {
     '미수금':  { background: '#fef2f2', color: '#dc2626' },
@@ -774,3 +949,4 @@ const tdStyle    = { padding: '11px 14px', fontSize: 13, color: '#374151' }
 const selStyle   = { padding: '7px 12px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 13, color: '#475569', background: '#fff', cursor: 'pointer' }
 const btnPrimary = { padding: '9px 20px', borderRadius: 8, border: 'none', background: '#2563eb', color: '#fff', cursor: 'pointer', fontSize: 14, fontWeight: 600 }
 const btnSmall   = { padding: '4px 10px', borderRadius: 6, border: '1px solid #e2e8f0', background: '#fff', cursor: 'pointer', fontSize: 12, color: '#475569' }
+const btnBulk    = { padding: '8px 16px', borderRadius: 8, border: 'none', color: '#fff', cursor: 'pointer', fontSize: 13, fontWeight: 600 }

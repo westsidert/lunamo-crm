@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { getCrew, createCrew, updateCrew, deleteCrew } from '../lib/crew'
 
-const EMPTY = { name: '', role: '', phone: '', rrn: '', memo: '', biz_type_code: '940909' }
+const EMPTY = { name: '', role: '', phone: '', rrn: '', account: '', memo: '', biz_type_code: '940909' }
 
 const formatRrn = (raw) => {
   const digits = raw.replace(/\D/g, '').slice(0, 13)
@@ -59,7 +59,7 @@ export default function Crew() {
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0f172a' }}>인력 관리</h1>
           <p style={{ color: '#64748b', marginTop: 4, fontSize: 13 }}>
-            외주 인력 목록 — 외주인건비 입력·원천징수 신고 시 활용
+            외주 인력 목록 · 외주인건비 입력·원천징수 신고 시 활용
           </p>
         </div>
         <button onClick={() => setEditing({ ...EMPTY })} style={btnPrimary}>+ 인력 추가</button>
@@ -69,17 +69,17 @@ export default function Crew() {
         <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 700 }}>
           <thead>
             <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
-              {['이름', '역할/분야', '연락처', '주민등록번호', '메모', ''].map(h => (
+              {['이름', '역할/분야', '연락처', '계좌번호', '주민등록번호', '메모', ''].map(h => (
                 <th key={h} style={{ padding: '11px 16px', textAlign: 'left', fontSize: 12, color: '#64748b', fontWeight: 600, whiteSpace: 'nowrap' }}>{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={6} style={{ padding: 40, textAlign: 'center', color: '#94a3b8', fontSize: 13 }}>불러오는 중...</td></tr>
+              <tr><td colSpan={7} style={{ padding: 40, textAlign: 'center', color: '#94a3b8', fontSize: 13 }}>불러오는 중...</td></tr>
             ) : crew.length === 0 ? (
               <tr>
-                <td colSpan={6} style={{ padding: 48, textAlign: 'center', color: '#94a3b8', fontSize: 13 }}>
+                <td colSpan={7} style={{ padding: 48, textAlign: 'center', color: '#94a3b8', fontSize: 13 }}>
                   <div style={{ fontSize: 28, marginBottom: 8 }}>👤</div>
                   등록된 인력이 없습니다.<br />
                   <span style={{ fontSize: 12 }}>인력을 추가하면 외주인건비 입력 시 이름을 선택할 수 있습니다.</span>
@@ -102,6 +102,9 @@ export default function Crew() {
                   </td>
                   <td style={{ padding: '12px 16px', fontSize: 13, color: '#64748b' }}>
                     {member.phone || <span style={{ color: '#cbd5e1' }}>-</span>}
+                  </td>
+                  <td style={{ padding: '12px 16px', fontSize: 12, color: '#475569', fontFamily: 'monospace' }}>
+                    {member.account || <span style={{ color: '#cbd5e1', fontFamily: 'sans-serif' }}>미등록</span>}
                   </td>
                   <td style={{ padding: '12px 16px' }}>
                     {masked ? (
@@ -165,8 +168,9 @@ function CrewModal({ member, onClose, onSave }) {
             ['이름 *', 'name', 'text', '예) 홍길동'],
             ['역할/분야', 'role', 'text', '예) 편집, 촬영, 작가'],
             ['연락처', 'phone', 'tel', '010-0000-0000'],
+            ['계좌번호 (입금 목록용)', 'account', 'text', '예) 국민 123456-01-234567'],
             ['업종코드 (간이지급명세서)', 'biz_type_code', 'text', '기본 940909 (기타자영업)'],
-            ['메모', 'memo', 'text', '계좌번호 등'],
+            ['메모', 'memo', 'text', '기타 메모'],
           ].map(([label, key, type, placeholder]) => (
             <div key={key} style={{ marginBottom: 14 }}>
               <label style={labelStyle}>{label}</label>
