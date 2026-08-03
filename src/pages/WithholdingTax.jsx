@@ -50,8 +50,10 @@ export default function WithholdingTax() {
   const [loading, setLoading] = useState(true)
   const [guideOpen, setGuideOpen] = useState(null)
   const [revealKey, setRevealKey] = useState(null)
+  const [merged, setMerged] = useState(() => new Set())  // 이번 신고에 합산할 미신고 과거 월
 
   useEffect(() => { load() }, [])
+  useEffect(() => { setMerged(new Set()) }, [period])  // 귀속월 변경 시 합산 선택 초기화
 
   const load = async () => {
     setLoading(true)
@@ -64,10 +66,37 @@ export default function WithholdingTax() {
     setLoading(false)
   }
 
+  // 마감이 지났는데 신고 기록이 전혀 없는 과거 지급월 (합산 신고 후보)
+  const unfiledPast = useMemo(() => {
+    const t0 = new Date(); t0.setHours(0, 0, 0, 0)
+    const periods = [...new Set(allTx.map(t => t.transaction_date?.slice(0, 7)).filter(Boolean))]
+    return periods
+      .filter(p => p < period && filingDeadline(p) < t0)
+      .filter(p => {
+        const f = filings.find(x => x.period === p)
+        return !f || STEP_KEYS.every(k => !f[k])
+      })
+      .sort()
+  }, [allTx, filings, period])
+
+  const toggleMerged = (p) => setMerged(prev => {
+    const next = new Set(prev)
+    next.has(p) ? next.delete(p) : next.add(p)
+    return next
+  })
+
   const monthTx = useMemo(
-    () => allTx.filter(tx => tx.transaction_date?.startsWith(period)),
-    [allTx, period]
+    () => allTx.filter(tx => {
+      const m = tx.transaction_date?.slice(0, 7)
+      return m === period || merged.has(m)
+    }),
+    [allTx, period, merged]
   )
+
+  // 표시용 라벨: 합산 시 "6월+7월 지급분 합산"
+  const periodsLabel = merged.size > 0
+    ? [...merged, period].sort().map(p => `${parseInt(p.split('-')[1])}월`).join('+') + ' 지급분 합산'
+    : `${periodLabel(period)} 지급분`
 
   // 인별 집계
   const people = useMemo(() => {
@@ -86,8 +115,9 @@ export default function WithholdingTax() {
       const localTax = p.txs.reduce((s, t) => s + calcLocalTax(t.supply_amount), 0)
       const stored = p.txs.reduce((s, t) => s + Number(t.withholding_tax || 0), 0)
       const unlinked = p.txs.filter(t => !t.crew_id)
+      const months = [...new Set(p.txs.map(t => t.transaction_date?.slice(0, 7)))].sort()
       return {
-        ...p, amount, incomeTax, localTax, stored,
+        ...p, amount, incomeTax, localTax, stored, months,
         mismatch: stored !== incomeTax + localTax,
         unlinked,
       }
@@ -117,17 +147,31 @@ export default function WithholdingTax() {
   const toggleStep = async (key) => {
     const next = !filing[key]
     try {
-      const saved = await upsertTaxFiling(period, {
+      const steps = {
         step_withholding: !!filing.step_withholding,
         step_statement: !!filing.step_statement,
         step_local: !!filing.step_local,
         step_paid: !!filing.step_paid,
         [key]: next,
-        snapshot: { people: totals.count, amount: totals.amount, income_tax: totals.incomeTax, local_tax: totals.localTax },
-      })
+      }
+      const snapshot = {
+        people: totals.count, amount: totals.amount,
+        income_tax: totals.incomeTax, local_tax: totals.localTax,
+        ...(merged.size > 0 ? { merged_periods: [...merged].sort() } : {}),
+      }
+      const savedList = [await upsertTaxFiling(period, { ...steps, snapshot })]
+      // 합산 신고 대상 과거 월도 같은 진행 상태 + 합산 메모로 기록
+      for (const mp of [...merged].sort()) {
+        savedList.push(await upsertTaxFiling(mp, {
+          ...steps,
+          memo: `${periodLabel(period)} 지급분에 합산 신고`,
+          snapshot: { merged_into: period },
+        }))
+      }
       setFilings(prev => {
-        const rest = prev.filter(f => f.period !== period)
-        return [...rest, saved].sort((a, b) => b.period.localeCompare(a.period))
+        const savedPeriods = new Set(savedList.map(s => s.period))
+        const rest = prev.filter(f => !savedPeriods.has(f.period))
+        return [...rest, ...savedList].sort((a, b) => b.period.localeCompare(a.period))
       })
     } catch (e) { alert('저장 실패: ' + e.message) }
   }
@@ -209,7 +253,7 @@ export default function WithholdingTax() {
   .note { color: #64748b; font-size: 11px; margin-top: 16px; line-height: 1.6; }
   @media print { body { margin: 12mm; } }
 </style></head><body>
-<h1>원천세 신고 자료 - ${esc(periodLabel(period))} 지급분</h1>
+<h1>원천세 신고 자료 - ${esc(periodsLabel)}</h1>
 <div class="sub">LUNAMO CRM · 출력일 ${new Date().toLocaleDateString('ko-KR')} · 신고 마감 ${deadline.getFullYear()}.${deadline.getMonth() + 1}.${deadline.getDate()}</div>
 
 <h2>1. 홈택스 원천세 신고 (원천징수이행상황신고서 · 사업소득 A25 매월징수)</h2>
@@ -277,17 +321,55 @@ ${people.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.crew?.rrn || '미등�
       }}>
         <div style={{ fontSize: 14, fontWeight: 600, color: doneCount === 4 ? '#16a34a' : (!hasData ? '#64748b' : daysLeft < 0 ? '#dc2626' : PURPLE) }}>
           {doneCount === 4
-            ? `✅ ${periodLabel(period)} 지급분 신고 완료`
+            ? `✅ ${periodsLabel} 신고 완료`
             : !hasData
               ? `${periodLabel(period)} 외주인건비 지급 내역 없음`
               : daysLeft >= 0
-                ? `⏰ ${periodLabel(period)} 지급분 신고 마감 D-${daysLeft} (${deadline.getMonth() + 1}/${deadline.getDate()})`
+                ? `⏰ ${periodsLabel} 신고 마감 D-${daysLeft} (${deadline.getMonth() + 1}/${deadline.getDate()})`
                 : `⚠️ 원천세·지방세 마감(${deadline.getMonth() + 1}/${deadline.getDate()}) 경과 - 미신고 시 가산세 발생`}
         </div>
         <div style={{ fontSize: 12, color: '#94a3b8' }}>
           원천세·지방세: 다음달 10일 / 간이지급명세서: {stmtDeadline.getMonth() + 1}/{stmtDeadline.getDate()}까지 · 진행 {doneCount}/4
         </div>
       </div>
+
+      {/* 미신고 과거 지급분 합산 패널 */}
+      {unfiledPast.length > 0 && (
+        <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 12, padding: '14px 18px', marginBottom: 16 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: '#92400e', marginBottom: 4 }}>
+            ⚠️ 신고하지 않은 과거 지급분이 있습니다
+          </div>
+          <div style={{ fontSize: 12, color: '#a16207', marginBottom: 10, lineHeight: 1.6 }}>
+            체크하면 해당 월 지급분을 <b>{periodLabel(period)} 신고에 합산</b>해서 계산합니다
+            (지급월을 이번 달로 보고 신고하는 실무 방식). 완료 체크 시 합산된 월도 함께 완료 처리됩니다.
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {unfiledPast.map(p => {
+              const txs = allTx.filter(t => t.transaction_date?.startsWith(p))
+              const names = new Set(txs.map(t => t.crew?.name || extractName(t.item)))
+              const amt = txs.reduce((s, t) => s + Number(t.supply_amount || 0), 0)
+              const on = merged.has(p)
+              return (
+                <button key={p} onClick={() => toggleMerged(p)} style={{
+                  display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer',
+                  padding: '8px 14px', borderRadius: 10, fontSize: 13,
+                  border: `1.5px solid ${on ? '#d97706' : '#fde68a'}`,
+                  background: on ? '#fef3c7' : '#fff',
+                  color: '#92400e', fontWeight: on ? 700 : 500,
+                }}>
+                  <input type="checkbox" checked={on} readOnly style={{ width: 14, height: 14, pointerEvents: 'none' }} />
+                  {periodLabel(p)} 지급분 · {names.size}명 · {formatKRW(amt)}원
+                </button>
+              )
+            })}
+          </div>
+          {merged.size > 0 && (
+            <div style={{ fontSize: 11, color: '#a16207', marginTop: 10 }}>
+              ※ 원칙은 기한 후 신고(가산세)이며, 합산 신고는 지급 시기를 조정해 신고하는 방식입니다. 애매하면 세무사 확인을 권합니다.
+            </div>
+          )}
+        </div>
+      )}
 
       {/* 12개월 히스토리 */}
       <div style={{ display: 'flex', gap: 6, marginBottom: 24, flexWrap: 'wrap' }}>
@@ -390,6 +472,11 @@ ${people.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.crew?.rrn || '미등�
                         <td style={{ ...tdStyle, fontWeight: 700 }}>
                           {p.name}
                           {p.txs.length > 1 && <span style={{ fontWeight: 400, color: '#94a3b8', fontSize: 11 }}> ({p.txs.length}건)</span>}
+                          {merged.size > 0 && (
+                            <span style={{ fontWeight: 600, color: '#d97706', fontSize: 10, marginLeft: 4 }}>
+                              {p.months.map(m => `${parseInt(m.split('-')[1])}월`).join('·')}
+                            </span>
+                          )}
                         </td>
                         <td style={tdStyle}>
                           {p.crew ? (
