@@ -3,7 +3,7 @@ import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, PieChart, Pie, Cell
 } from 'recharts'
-import { getDashboardStats, getYearlyStats, getUnpaidSales, getRecentTransactions, getFixedExpenses, getAlertsData } from '../lib/api'
+import { getDashboardStats, getYearlyStats, getUnpaidSales, getRecentTransactions, getFixedExpenses, getAlertsData, updateTransactionsStatus } from '../lib/api'
 import { formatKRW, thisYear, thisMonth, MONTHS } from '../lib/utils'
 import { getLaborTransactions, getTaxFilings, calcIncomeTax, calcLocalTax, filingDeadline, currentFilingPeriod } from '../lib/withholding'
 import useIsMobile from '../lib/useIsMobile'
@@ -216,6 +216,20 @@ export default function Dashboard({ onNavigate }) {
 
   const vatLabel = exVat ? '부가세 제외' : '부가세 포함'
 
+  // 연간 KPI 딥링크용 기간 값 (PeriodSelect 프리셋과 호환되는 올해/작년만 지원)
+  const yearPeriod = year === thisYear() ? 'preset:thisYear' : year === thisYear() - 1 ? 'preset:lastYear' : ''
+
+  // 미수금 배너에서 바로 수금완료 처리
+  const markCollected = async (e, tx) => {
+    e.stopPropagation()
+    const who = tx.clients?.name || '미지정'
+    if (!confirm(`${who} · ${formatKRW(Number(tx.total_amount))}원을 수금완료 처리할까요?`)) return
+    try {
+      await updateTransactionsStatus([tx.id], '수금완료')
+      setUnpaidTx(prev => prev.filter(t => t.id !== tx.id))
+    } catch (err) { alert('처리 실패: ' + err.message) }
+  }
+
   // ── 경고등 (0이 아니면 할 일) ─────────────────────
   const alerts = (() => {
     const today = new Date(); today.setHours(0, 0, 0, 0)
@@ -230,6 +244,7 @@ export default function Dashboard({ onNavigate }) {
     return [
       {
         key: 'receivable', label: '미수금 90일+', nav: 'transactions',
+        preset: { type: '매출', status: '미수금' },
         state: over90.length ? 'danger' : over30.length ? 'warn' : 'ok',
         text: over90.length
           ? `${over90.length}건 · ${formatKRW(over90.reduce((s, t) => s + Number(t.total_amount), 0))}원`
@@ -244,21 +259,25 @@ export default function Dashboard({ onNavigate }) {
       },
       {
         key: 'labor', label: '미지급 인건비', nav: 'transactions',
+        preset: { type: '외주인건비', status: '미지급' },
         state: ad?.unpaidLabor?.length ? 'warn' : 'ok',
         text: ad?.unpaidLabor?.length ? `${ad.unpaidLabor.length}건 · ${formatKRW(unpaidLaborNet)}원` : '정상',
       },
       {
         key: 'invoice', label: '세금계산서 미발행', nav: 'transactions',
+        preset: { type: '매출', status: '미발행' },
         state: ad?.unissuedInvoices?.length ? 'warn' : 'ok',
         text: ad?.unissuedInvoices?.length ? `매출 ${ad.unissuedInvoices.length}건` : '정상',
       },
       {
         key: 'projects', label: '프로젝트 마감', nav: 'projects',
+        preset: { due: true },
         state: overdueP.length ? 'danger' : soonP.length ? 'warn' : 'ok',
         text: overdueP.length ? `지연 ${overdueP.length}건` : soonP.length ? `7일 내 ${soonP.length}건` : '정상',
       },
       {
         key: 'quotes', label: '발송 견적 대기', nav: 'quotes',
+        preset: { status: '발송완료' },
         state: ad?.sentQuotes?.length ? 'info' : 'ok',
         text: ad?.sentQuotes?.length ? `${ad.sentQuotes.length}건 · ${formatKRW(sentTotal)}원` : '없음',
       },
@@ -313,7 +332,7 @@ export default function Dashboard({ onNavigate }) {
           {alerts.map(a => {
             const c = ALERT_STYLE[a.state]
             return (
-              <button key={a.key} onClick={() => onNavigate?.(a.nav)} style={{
+              <button key={a.key} onClick={() => onNavigate?.(a.nav, a.preset)} style={{
                 textAlign: 'left', cursor: 'pointer', borderRadius: 10, padding: '10px 12px',
                 background: c.bg, border: `1px solid ${c.border}`,
               }}>
@@ -333,11 +352,14 @@ export default function Dashboard({ onNavigate }) {
         <SectionLabel title={`📊 ${year}년 연간 현황`} badge={vatLabel} />
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: isMobile ? 10 : 16 }}>
           <KpiCard label="연 매출" value={formatKRW(aSales)} sub={`${aSalesCnt}건`} color="#2563eb" large
-            delta={aSales - pyaSales} prevLabel={`${year-1}년`} prevValue={pyaSales} />
+            delta={aSales - pyaSales} prevLabel={`${year-1}년`} prevValue={pyaSales}
+            onClick={() => onNavigate?.('transactions', { type: '매출', period: yearPeriod })} />
           <KpiCard label="연 매입" value={formatKRW(aPurchase)} sub={`${aPurchaseCnt}건`} color="#d97706" large
-            delta={aPurchase - pyaPurchase} prevLabel={`${year-1}년`} prevValue={pyaPurchase} />
+            delta={aPurchase - pyaPurchase} prevLabel={`${year-1}년`} prevValue={pyaPurchase}
+            onClick={() => onNavigate?.('transactions', { type: '매입', period: yearPeriod })} />
           <KpiCard label="연 외주인건비" value={formatKRW(aLabor)} sub={`${aLaborCnt}건`} color="#7c3aed" large
-            delta={aLabor - pyaLabor} prevLabel={`${year-1}년`} prevValue={pyaLabor} />
+            delta={aLabor - pyaLabor} prevLabel={`${year-1}년`} prevValue={pyaLabor}
+            onClick={() => onNavigate?.('transactions', { type: '외주인건비', period: yearPeriod })} />
           <KpiCard
             label="연 순이익" value={formatKRW(aProfit)}
             sub={aProfit >= 0 ? '흑자' : '적자'}
@@ -345,7 +367,7 @@ export default function Dashboard({ onNavigate }) {
             delta={aProfit - pyaProfit} prevLabel={`${year-1}년`} prevValue={pyaProfit}
           />
           <KpiCard
-            label="연 이익률" value={aSales ? `${aMargin}%` : '-'}
+            label="연 이익률" value={aSales ? `${aMargin}%` : '-'} unit=""
             sub={`${year}년 전체`} color="#7c3aed" large
           />
         </div>
@@ -382,16 +404,22 @@ export default function Dashboard({ onNavigate }) {
               const days = Math.floor((new Date() - new Date(tx.transaction_date)) / 86400000)
               const urgent = days >= 30
               return (
-                <div key={tx.id} style={{
-                  display: 'grid', gridTemplateColumns: '110px 1fr 1fr auto auto',
-                  gap: 12, alignItems: 'center',
-                  padding: '10px 20px',
-                  background: i % 2 === 0 ? '#fff' : '#fafafa',
-                  fontSize: 13,
-                }}>
+                <div key={tx.id}
+                  onClick={() => onNavigate?.('transactions', { editId: tx.id })}
+                  title="클릭하면 거래 수정 화면으로 이동"
+                  style={{
+                    display: 'grid', gridTemplateColumns: '110px 1fr 1fr auto auto auto',
+                    gap: 12, alignItems: 'center',
+                    padding: '10px 20px',
+                    background: i % 2 === 0 ? '#fff' : '#fafafa',
+                    fontSize: 13, cursor: 'pointer',
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.background = '#fff7ed'}
+                  onMouseLeave={e => e.currentTarget.style.background = i % 2 === 0 ? '#fff' : '#fafafa'}
+                >
                   <span style={{ color: '#94a3b8', fontSize: 12 }}>{tx.transaction_date}</span>
                   <span style={{ color: '#374151', fontWeight: 500 }}>{tx.clients?.name || '미지정'}</span>
-                  <span style={{ color: '#64748b' }}>{tx.memo || '—'}</span>
+                  <span style={{ color: '#64748b' }}>{tx.memo || '-'}</span>
                   <span style={{
                     fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 20,
                     background: urgent ? '#fef2f2' : '#fff7ed',
@@ -403,6 +431,13 @@ export default function Dashboard({ onNavigate }) {
                   <span style={{ color: '#dc2626', fontWeight: 700, textAlign: 'right', whiteSpace: 'nowrap' }}>
                     {formatKRW(exVat ? Number(tx.supply_amount) : Number(tx.total_amount))}원
                   </span>
+                  <button onClick={(e) => markCollected(e, tx)} style={{
+                    padding: '4px 10px', borderRadius: 6, border: '1px solid #86efac',
+                    background: '#f0fdf4', color: '#16a34a', cursor: 'pointer',
+                    fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap',
+                  }}>
+                    수금완료
+                  </button>
                 </div>
               )
             })}
@@ -470,14 +505,18 @@ export default function Dashboard({ onNavigate }) {
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: isMobile ? 10 : 16 }}>
           <KpiCard label={`${month}월 매출`} value={formatKRW(mSales)} sub={`${mSalesCnt}건`} color="#2563eb"
-            delta={mSales - pSales} prevLabel={`${prevMonth}월`} prevValue={pSales} />
+            delta={mSales - pSales} prevLabel={`${prevMonth}월`} prevValue={pSales}
+            onClick={() => onNavigate?.('transactions', { type: '매출', period: `month:${year}-${String(month).padStart(2, '0')}` })} />
           <KpiCard label={`${month}월 매입`} value={formatKRW(mPurchase)} sub={`${mPurchaseCnt}건`} color="#d97706"
-            delta={mPurchase - pPurchase} prevLabel={`${prevMonth}월`} prevValue={pPurchase} />
+            delta={mPurchase - pPurchase} prevLabel={`${prevMonth}월`} prevValue={pPurchase}
+            onClick={() => onNavigate?.('transactions', { type: '매입', period: `month:${year}-${String(month).padStart(2, '0')}` })} />
           <KpiCard label={`${month}월 외주인건비`} value={formatKRW(mLabor)} sub={`${mLaborCnt}건`} color="#7c3aed"
-            delta={mLabor - pLabor} prevLabel={`${prevMonth}월`} prevValue={pLabor} />
+            delta={mLabor - pLabor} prevLabel={`${prevMonth}월`} prevValue={pLabor}
+            onClick={() => onNavigate?.('transactions', { type: '외주인건비', period: `month:${year}-${String(month).padStart(2, '0')}` })} />
           <KpiCard label={`${month}월 고정비`} value={formatKRW(fixedTotal)}
             sub={fixedCount > 0 ? `${fixedCount}건` : '없음'} color="#0891b2"
-            delta={fixedTotal - prevFixedTotal} prevLabel={`${prevMonth}월`} prevValue={prevFixedTotal} />
+            delta={fixedTotal - prevFixedTotal} prevLabel={`${prevMonth}월`} prevValue={prevFixedTotal}
+            onClick={() => onNavigate?.('fixed')} />
           <KpiCard
             label={`${month}월 순이익`} value={formatKRW(mProfit)}
             sub={mProfit >= 0 ? '흑자' : '적자'}
@@ -648,8 +687,8 @@ export default function Dashboard({ onNavigate }) {
                 return (
                   <tr key={tx.id} style={{ borderBottom: '1px solid #f8fafc', background: i % 2 ? '#fafafa' : '#fff' }}>
                     <td style={{ padding: '10px 10px', color: '#64748b', whiteSpace: 'nowrap' }}>{tx.transaction_date}</td>
-                    <td style={{ padding: '10px 10px', fontWeight: 500, color: '#374151' }}>{tx.clients?.name || '—'}</td>
-                    <td style={{ padding: '10px 10px', color: '#64748b', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tx.description || '—'}</td>
+                    <td style={{ padding: '10px 10px', fontWeight: 500, color: '#374151' }}>{tx.clients?.name || '-'}</td>
+                    <td style={{ padding: '10px 10px', color: '#64748b', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tx.description || '-'}</td>
                     <td style={{ padding: '10px 10px' }}>
                       <span style={{
                         background: TYPE_BG[tx.type], color: TYPE_COLOR[tx.type],
@@ -665,7 +704,7 @@ export default function Dashboard({ onNavigate }) {
                         background: isPaid ? '#f0fdf4' : isUnpaid ? '#fef2f2' : '#f8fafc',
                         color: isPaid ? '#059669' : isUnpaid ? '#dc2626' : '#94a3b8',
                       }}>
-                        {tx.payment_status || '—'}
+                        {tx.payment_status || '-'}
                       </span>
                     </td>
                   </tr>
@@ -683,6 +722,7 @@ export default function Dashboard({ onNavigate }) {
           {[
             {
               nav: 'quotes', icon: '📋', label: '견적서',
+              preset: alertsData?.sentQuotes?.length ? { status: '발송완료' } : null,
               value: alertsData?.sentQuotes?.length ? `발송 ${alertsData.sentQuotes.length}건 대기` : '대기 없음',
               color: '#2563eb',
             },
@@ -702,7 +742,7 @@ export default function Dashboard({ onNavigate }) {
               color: '#d97706',
             },
           ].map(m => (
-            <button key={m.nav} onClick={() => onNavigate?.(m.nav)} style={{
+            <button key={m.nav} onClick={() => onNavigate?.(m.nav, m.preset)} style={{
               textAlign: 'left', cursor: 'pointer', background: '#fff',
               border: '1px solid #e2e8f0', borderRadius: 12, padding: '14px 16px',
             }}>
@@ -725,23 +765,24 @@ function SectionLabel({ title, badge }) {
   )
 }
 
-function KpiCard({ label, value, sub, color, large, delta, prevLabel, prevValue }) {
+function KpiCard({ label, value, sub, color, large, delta, prevLabel, prevValue, onClick, unit = '원' }) {
   const hasDelta = delta !== undefined && prevLabel
   const isUp   = delta > 0
   const isFlat = delta === 0
 
   return (
-    <div style={{
+    <div onClick={onClick} title={onClick ? '클릭하면 해당 내역으로 이동' : undefined} style={{
       background: '#fff', borderRadius: 14,
       padding: large ? '22px 24px' : '18px 20px',
       border: '1px solid #e2e8f0',
       borderTop: `3px solid ${color}`,
+      cursor: onClick ? 'pointer' : 'default',
     }}>
       <div style={{ fontSize: 12, color: '#94a3b8', fontWeight: 500, marginBottom: 8 }}>{label}</div>
       <div style={{
         fontSize: large ? 20 : 18, fontWeight: 700, color, marginBottom: 4,
         whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-      }}>{value}원</div>
+      }}>{value}{unit}</div>
       <div style={{ fontSize: 12, color: '#64748b' }}>{sub}</div>
       {hasDelta && (
         <div style={{

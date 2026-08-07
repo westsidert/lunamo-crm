@@ -135,13 +135,15 @@ const STATUS_STYLE = {
 }
 
 // ── Main Page ──────────────────────────────────────────────────────────────
-export default function Quotes() {
+export default function Quotes({ preset }) {
   const [quotes, setQuotes]   = useState([])
   const [clients, setClients] = useState([])
   const [loading, setLoading] = useState(true)
   const [editing, setEditing] = useState(null)   // null | { meta, values, discount, id? }
   const [preview, setPreview] = useState(null)
   const [showImgSettings, setShowImgSettings] = useState(false)
+  // 상태 필터 (대시보드 딥링크 프리셋으로 초기화 가능)
+  const [statusFilter, setStatusFilter] = useState(preset?.status || '')
 
   useEffect(() => { loadAll() }, [])
 
@@ -228,7 +230,7 @@ export default function Quotes() {
       : `이 견적서는 "${q.status}" 상태입니다.\n그래도 프로젝트로 전환하시겠습니까?`
     if (!confirm(msg)) return
     try {
-      // quote_items가 같이 로드되어 있어야 함 — getQuotes()가 이미 가져옴
+      // quote_items가 같이 로드되어 있어야 함 - getQuotes()가 이미 가져옴
       const { project, alreadyExists, clientCreated } = await createProjectFromQuote(q)
       if (alreadyExists) {
         alert(`이미 이 견적서로 생성된 프로젝트가 있습니다: "${project.name}"`)
@@ -241,6 +243,8 @@ export default function Quotes() {
       alert('프로젝트 전환 실패: ' + (e.message || e))
     }
   }
+
+  const visibleQuotes = statusFilter ? quotes.filter(q => q.status === statusFilter) : quotes
 
   return (
     <div style={{ padding: '28px 32px' }}>
@@ -269,6 +273,25 @@ export default function Quotes() {
         </div>
       </div>
 
+      {/* 상태 필터 칩 */}
+      <div style={{ display: 'flex', gap: 6, marginBottom: 14, flexWrap: 'wrap' }}>
+        {['', '작성중', '발송완료', '수주', '미수주'].map(s => {
+          const active = statusFilter === s
+          const ss = s ? STATUS_STYLE[s] : { bg: '#f1f5f9', color: '#475569' }
+          const count = s ? quotes.filter(q => q.status === s).length : quotes.length
+          return (
+            <button key={s || 'all'} onClick={() => setStatusFilter(s)} style={{
+              padding: '6px 14px', borderRadius: 20, fontSize: 13, fontWeight: 600, cursor: 'pointer',
+              border: `1.5px solid ${active ? ss.color : '#e2e8f0'}`,
+              background: active ? ss.bg : '#fff',
+              color: active ? ss.color : '#94a3b8',
+            }}>
+              {s || '전체'} <span style={{ fontWeight: 700 }}>{count}</span>
+            </button>
+          )
+        })}
+      </div>
+
       <div style={{ background: '#fff', borderRadius: 14, border: '1px solid #e2e8f0', overflow: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
@@ -281,9 +304,11 @@ export default function Quotes() {
           <tbody>
             {loading ? (
               <tr><td colSpan={6} style={{ textAlign: 'center', padding: 40, color: '#94a3b8' }}>불러오는 중...</td></tr>
-            ) : quotes.length === 0 ? (
-              <tr><td colSpan={6} style={{ textAlign: 'center', padding: 40, color: '#94a3b8', fontSize: 13 }}>견적서가 없습니다</td></tr>
-            ) : quotes.map(q => {
+            ) : visibleQuotes.length === 0 ? (
+              <tr><td colSpan={6} style={{ textAlign: 'center', padding: 40, color: '#94a3b8', fontSize: 13 }}>
+                {statusFilter ? `'${statusFilter}' 상태의 견적서가 없습니다` : '견적서가 없습니다'}
+              </td></tr>
+            ) : visibleQuotes.map(q => {
               const ss = STATUS_STYLE[q.status] || STATUS_STYLE['작성중']
               const clientName = q.clients?.name || q.client_name_override || '-'
               return (
@@ -1473,7 +1498,7 @@ function QuotePreviewModal({ quote, clients, onClose }) {
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.85)', display: 'flex', flexDirection: 'column', zIndex: 1000 }}>
       <div style={{ background: '#1e293b', padding: '10px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
-        <span style={{ color: '#e2e8f0', fontSize: 14, fontWeight: 500 }}>견적서 미리보기 — {quote.project_title}</span>
+        <span style={{ color: '#e2e8f0', fontSize: 14, fontWeight: 500 }}>견적서 미리보기 - {quote.project_title}</span>
         <div style={{ display: 'flex', gap: 8 }}>
           <button onClick={() => setShowCompModal(true)} style={{ ...btnPrimary, background: '#7c3aed' }}>📊 비교견적서</button>
           <button onClick={() => setShowEmailModal(true)} style={{ ...btnPrimary, background: '#059669' }}>✉️ 이메일 발송</button>
@@ -1766,7 +1791,7 @@ const getSelectedItems = (values, customItems) => [
     .map(ci => ({ cat: ci.cat, name: ci.name, day: Number(ci.day) || 1, qty: Number(ci.qty) || 1, price: Number(ci.price) || 0 })),
 ]
 
-// 비교견적서 레이아웃 A – 전통형 (적색 테두리, 격식체)
+// 비교견적서 레이아웃 A - 전통형 (적색 테두리, 격식체)
 function CompPreviewA({ comp, items, meta, clientName, qdStr, finalAmount, subTotal }) {
   const PCATS = ['Pre-production', 'production', 'Post-production', '기타']
   const vat = Math.round(subTotal * 0.1)
@@ -1875,7 +1900,7 @@ function CompPreviewA({ comp, items, meta, clientName, qdStr, finalAmount, subTo
   )
 }
 
-// 비교견적서 레이아웃 B – 모던형 (네이비 헤더, 단가×수량 방식)
+// 비교견적서 레이아웃 B - 모던형 (네이비 헤더, 단가×수량 방식)
 function CompPreviewB({ comp, items, meta, clientName, qdStr, finalAmount, subTotal }) {
   const PCATS = ['Pre-production', 'production', 'Post-production', '기타']
   const vat = Math.round(subTotal * 0.1)
@@ -1919,7 +1944,7 @@ function CompPreviewB({ comp, items, meta, clientName, qdStr, finalAmount, subTo
         <div style={{ fontSize: 28, fontWeight: 700, color: '#1e3a5f' }}>₩ {finalAmount.toLocaleString()}</div>
       </div>
 
-      {/* 항목 테이블 – 5컬럼: No / 항목명 / 단가 / 수량 / 금액 */}
+      {/* 항목 테이블 - 5컬럼: No / 항목명 / 단가 / 수량 / 금액 */}
       <div style={{ padding: '20px 44px 0' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
@@ -1968,7 +1993,7 @@ function CompPreviewB({ comp, items, meta, clientName, qdStr, finalAmount, subTo
   )
 }
 
-// 인쇄 HTML 빌더 – A형
+// 인쇄 HTML 빌더 - A형
 const buildCompHtmlA = (comp, items, meta, clientName, qdStr, subTotal, finalAmount) => {
   const PCATS = ['Pre-production', 'production', 'Post-production', '기타']
   const vat = Math.round(subTotal * 0.1)
@@ -2034,7 +2059,7 @@ const buildCompHtmlA = (comp, items, meta, clientName, qdStr, subTotal, finalAmo
 </div></body></html>`
 }
 
-// 인쇄 HTML 빌더 – B형
+// 인쇄 HTML 빌더 - B형
 const buildCompHtmlB = (comp, items, meta, clientName, qdStr, subTotal, finalAmount) => {
   const PCATS = ['Pre-production', 'production', 'Post-production', '기타']
   const vat = Math.round(subTotal * 0.1)
@@ -2245,7 +2270,7 @@ function CompanySettingsModal({ onClose, onSave }) {
         {comps.map((comp, i) => (
           <div key={i} style={{ marginBottom: 28, paddingBottom: 28, borderBottom: i < comps.length - 1 ? '1px solid #e2e8f0' : undefined }}>
             <div style={{ fontSize: 14, fontWeight: 700, color: '#7c3aed', marginBottom: 14 }}>
-              업체 {comp.id} — 루나모 대비 +{Math.round((comp.multiplier - 1) * 100)}%
+              업체 {comp.id} - 루나모 대비 +{Math.round((comp.multiplier - 1) * 100)}%
             </div>
             {[
               ['업체명 *', 'name'],

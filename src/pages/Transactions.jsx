@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { getTransactions, createTransaction, createTransactions, updateTransaction, deleteTransaction, updateTransactionsStatus, getClients, getProjects } from '../lib/api'
+import { getTransactions, createTransaction, createTransactions, updateTransaction, deleteTransaction, updateTransactionsStatus, updateTransactionsInvoice, getClients, getProjects, createClient, createProject } from '../lib/api'
 import { formatKRW, formatDate, calcVat } from '../lib/utils'
 import Modal, { FormRow, Input, Select, Textarea, FormActions } from '../components/Modal'
 import { getCrew, createCrew } from '../lib/crew'
@@ -23,7 +23,7 @@ const TYPE_STYLE = {
 
 const calcWithholding = (amount) => Math.round((Number(amount) || 0) * 0.033)
 
-export default function Transactions() {
+export default function Transactions({ preset }) {
   const isMobile = useIsMobile()
   const [transactions, setTransactions] = useState([])
   const [clients, setClients] = useState([])
@@ -31,7 +31,10 @@ export default function Transactions() {
   const [crew, setCrew] = useState([])
   const [loading, setLoading] = useState(true)
   const [modal, setModal] = useState(null)
-  const [filter, setFilter] = useState({ type: '', client_id: '', period: '' })
+  // 대시보드 딥링크 프리셋으로 필터 초기화 (status: '미수금'|'미지급'|'미발행')
+  const [filter, setFilter] = useState({
+    type: preset?.type || '', client_id: '', period: preset?.period || '', status: preset?.status || '',
+  })
   const [selected, setSelected] = useState(new Set())
   const [bulkLoading, setBulkLoading] = useState(false)
 
@@ -45,6 +48,11 @@ export default function Transactions() {
       setClients(cl)
       setProjects(pr)
       setCrew(cr)
+      // 딥링크로 특정 거래 수정 모달 바로 열기
+      if (preset?.editId) {
+        const target = tx.find(t => t.id === preset.editId)
+        if (target) setModal(target)
+      }
     } catch (e) { console.error(e) }
     setLoading(false)
   }
@@ -54,14 +62,25 @@ export default function Transactions() {
     .sort().reverse()
 
   const range = valueToRange(filter.period)
-  // 유형 제외 공통 필터 (유형 칩의 건수 계산용)
-  const baseFiltered = transactions.filter(tx => {
+  // 상태 필터 매칭 ('미발행'은 매출 중 세금계산서 미발행)
+  const matchesStatus = (tx, s) => {
+    if (!s) return true
+    if (s === '미발행') return tx.type === '매출' && !tx.invoice_issued
+    return tx.payment_status === s
+  }
+  // 기간·거래처 공통 필터
+  const commonFiltered = transactions.filter(tx => {
     if (filter.client_id && tx.client_id !== filter.client_id) return false
     if (range && (!tx.transaction_date || tx.transaction_date < range.from || tx.transaction_date > range.to)) return false
     return true
   })
+  // 유형 칩 건수용 (상태 필터 반영, 유형 제외)
+  const baseFiltered = commonFiltered.filter(tx => matchesStatus(tx, filter.status))
   const filtered = baseFiltered.filter(tx => !filter.type || tx.type === filter.type)
   const typeCount = (t) => baseFiltered.filter(tx => tx.type === t).length
+  // 상태 칩 건수용 (유형 필터 반영, 상태 제외)
+  const statusBase = commonFiltered.filter(tx => !filter.type || tx.type === filter.type)
+  const statusCount = (s) => statusBase.filter(tx => matchesStatus(tx, s)).length
 
   const totalSales    = filtered.filter(t => t.type === '매출').reduce((s, t) => s + Number(t.total_amount), 0)
   const totalPurchase = filtered.filter(t => t.type === '매입').reduce((s, t) => s + Number(t.total_amount), 0)
@@ -105,6 +124,41 @@ export default function Transactions() {
     setBulkLoading(false)
   }
 
+  // 선택 항목 중 세금계산서 발행 완료 처리 가능한 건 (매출 + 미발행)
+  const invoiceTargets = () => selectedInView.filter(t => t.type === '매출' && !t.invoice_issued)
+  const applyBulkInvoice = async () => {
+    const targets = invoiceTargets()
+    if (targets.length === 0) return
+    setBulkLoading(true)
+    try {
+      const ids = targets.map(t => t.id)
+      const updated = await updateTransactionsInvoice(ids, true)
+      const map = new Map(updated.map(u => [u.id, u]))
+      setTransactions(prev => prev.map(t => map.get(t.id) || t))
+      setSelected(prev => { const next = new Set(prev); ids.forEach(id => next.delete(id)); return next })
+    } catch (e) { alert('발행 처리 실패: ' + e.message) }
+    setBulkLoading(false)
+  }
+
+  // 원클릭 토글: 상태 배지 (미수금<->수금완료 / 미지급<->지급완료)
+  const toggleStatus = async (tx) => {
+    const nextMap = { '미수금': '수금완료', '수금완료': '미수금', '미지급': '지급완료', '지급완료': '미지급' }
+    const next = nextMap[tx.payment_status]
+    if (!next) return
+    try {
+      const [updated] = await updateTransactionsStatus([tx.id], next)
+      setTransactions(prev => prev.map(t => t.id === updated.id ? updated : t))
+    } catch (e) { alert('상태 변경 실패: ' + e.message) }
+  }
+
+  // 원클릭 토글: 증빙 (세금계산서/원천세 영수증 발행 여부)
+  const toggleInvoice = async (tx) => {
+    try {
+      const [updated] = await updateTransactionsInvoice([tx.id], !tx.invoice_issued)
+      setTransactions(prev => prev.map(t => t.id === updated.id ? updated : t))
+    } catch (e) { alert('발행 여부 변경 실패: ' + e.message) }
+  }
+
   // 미지급 외주인건비 입금 목록 (동일인 합산)
   const openPayoutList = () => setModal('payout-list')
 
@@ -143,8 +197,8 @@ export default function Transactions() {
           <option value="">전체 거래처</option>
           {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
-        {(filter.type || filter.client_id || filter.period) && (
-          <button onClick={() => setFilter({ type: '', client_id: '', period: '' })} style={{ ...selStyle, cursor: 'pointer' }}>
+        {(filter.type || filter.client_id || filter.period || filter.status) && (
+          <button onClick={() => setFilter({ type: '', client_id: '', period: '', status: '' })} style={{ ...selStyle, cursor: 'pointer' }}>
             초기화
           </button>
         )}
@@ -170,6 +224,25 @@ export default function Transactions() {
             </button>
           )
         })}
+        {/* 상태 칩 (다시 누르면 해제) */}
+        <span style={{ width: 1, background: '#e2e8f0', margin: '4px 4px' }} />
+        {[
+          { key: '미수금', label: '미수금', color: '#dc2626', bg: '#fef2f2' },
+          { key: '미지급', label: '미지급', color: '#ea580c', bg: '#fff7ed' },
+          { key: '미발행', label: '계산서 미발행', color: '#7c3aed', bg: '#f5f3ff' },
+        ].map(c => {
+          const active = filter.status === c.key
+          return (
+            <button key={c.key} onClick={() => setFilter(f => ({ ...f, status: active ? '' : c.key }))} style={{
+              padding: '6px 14px', borderRadius: 20, fontSize: 13, fontWeight: 600, cursor: 'pointer',
+              border: `1.5px solid ${active ? c.color : '#e2e8f0'}`,
+              background: active ? c.bg : '#fff',
+              color: active ? c.color : '#94a3b8',
+            }}>
+              {c.label} <span style={{ fontWeight: 700 }}>{statusCount(c.key)}</span>
+            </button>
+          )
+        })}
       </div>
 
       {/* 일괄 작업 바 (선택 시 노출) */}
@@ -182,6 +255,7 @@ export default function Transactions() {
           {(() => {
             const su = bulkTargets('수금완료').length
             const ji = bulkTargets('지급완료').length
+            const inv = invoiceTargets().length
             return (
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 {su > 0 && (
@@ -194,8 +268,13 @@ export default function Transactions() {
                     지급완료로 변경 ({ji})
                   </button>
                 )}
-                {su === 0 && ji === 0 && (
-                  <span style={{ color: '#94a3b8', fontSize: 12 }}>선택 항목이 모두 완료 상태입니다</span>
+                {inv > 0 && (
+                  <button onClick={applyBulkInvoice} disabled={bulkLoading} style={{ ...btnBulk, background: '#2563eb' }}>
+                    계산서 발행 완료 ({inv})
+                  </button>
+                )}
+                {su === 0 && ji === 0 && inv === 0 && (
+                  <span style={{ color: '#94a3b8', fontSize: 12 }}>선택 항목에 처리할 작업이 없습니다</span>
                 )}
               </div>
             )
@@ -261,15 +340,21 @@ export default function Transactions() {
                     }
                   </td>
                   <td style={{ ...tdStyle, textAlign: 'center', fontSize: 12 }}>
-                    {isLabor
-                      ? (tx.invoice_issued ? <span style={{ color: '#7c3aed', fontSize: 11 }}>원천세<br/>영수증</span> : '-')
-                      : (tx.invoice_issued ? '✓' : '-')
-                    }
+                    <button onClick={() => toggleInvoice(tx)}
+                      title={`클릭하여 ${isLabor ? '원천세 영수증' : '세금계산서'} ${tx.invoice_issued ? '미발행' : '발행 완료'}으로 변경`}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 6px', fontSize: 12, color: '#374151' }}>
+                      {isLabor
+                        ? (tx.invoice_issued ? <span style={{ color: '#7c3aed', fontSize: 11 }}>원천세<br/>영수증</span> : <span style={{ color: '#cbd5e1' }}>-</span>)
+                        : (tx.invoice_issued ? '✓' : <span style={{ color: '#cbd5e1' }}>-</span>)
+                      }
+                    </button>
                   </td>
                   <td style={{ padding: '11px 14px' }}>
-                    <span style={{ padding: '2px 8px', borderRadius: 20, fontSize: 11, ...paymentStyle(tx.payment_status) }}>
+                    <button onClick={() => toggleStatus(tx)}
+                      title="클릭하여 상태 전환"
+                      style={{ padding: '2px 8px', borderRadius: 20, fontSize: 11, border: 'none', cursor: 'pointer', ...paymentStyle(tx.payment_status) }}>
                       {tx.payment_status}
-                    </span>
+                    </button>
                   </td>
                   <td style={{ ...tdStyle, maxWidth: 120, color: '#94a3b8', fontSize: 12 }}>{tx.memo || ''}</td>
                   <td style={{ padding: '11px 14px' }}>
@@ -313,6 +398,8 @@ export default function Transactions() {
           clients={clients}
           projects={projects}
           crew={crew}
+          onClientCreated={(c) => setClients(prev => [...prev, c].sort((a, b) => a.name.localeCompare(b.name, 'ko')))}
+          onProjectCreated={(p) => setProjects(prev => [p, ...prev])}
           onClose={() => setModal(null)}
           onSave={handleSave}
         />
@@ -362,14 +449,58 @@ export default function Transactions() {
   }
 }
 
-function TransactionModal({ tx, clients, projects, crew, onClose, onSave }) {
+function TransactionModal({ tx, clients, projects, crew, onClientCreated, onProjectCreated, onClose, onSave }) {
   const [form, setForm] = useState({ ...tx, withholding_tax: tx.withholding_tax ?? '' })
   const [loading, setLoading] = useState(false)
   const [inputMode, setInputMode] = useState('supply') // 'supply' | 'total'
   const [totalInput, setTotalInput] = useState('')
+  // 즉석 등록 모드: null | 'client' | 'project'
+  const [inlineNew, setInlineNew] = useState(null)
+  const [inlineName, setInlineName] = useState('')
+  const [inlineSaving, setInlineSaving] = useState(false)
   const isLabor = form.type === '외주인건비'
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  const startInlineNew = (kind) => { setInlineNew(kind); setInlineName('') }
+  const submitInlineNew = async () => {
+    const name = inlineName.trim()
+    if (!name) { alert('이름을 입력해주세요'); return }
+    setInlineSaving(true)
+    try {
+      if (inlineNew === 'client') {
+        const created = await createClient({ name })
+        onClientCreated?.(created)
+        set('client_id', created.id)
+      } else {
+        const created = await createProject({ name, status: '진행중' })
+        onProjectCreated?.(created)
+        set('project_id', created.id)
+      }
+      setInlineNew(null)
+    } catch (e) { alert('등록 실패: ' + e.message) }
+    setInlineSaving(false)
+  }
+
+  const InlineNewBox = (
+    <div style={{ display: 'flex', gap: 6 }}>
+      <Input
+        autoFocus
+        placeholder={inlineNew === 'client' ? '새 거래처 이름' : '새 프로젝트 이름'}
+        value={inlineName}
+        onChange={e => setInlineName(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); submitInlineNew() } }}
+      />
+      <button type="button" onClick={submitInlineNew} disabled={inlineSaving}
+        style={{ padding: '0 14px', borderRadius: 8, border: 'none', background: '#2563eb', color: '#fff', cursor: 'pointer', fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap' }}>
+        {inlineSaving ? '...' : '등록'}
+      </button>
+      <button type="button" onClick={() => setInlineNew(null)}
+        style={{ padding: '0 10px', borderRadius: 8, border: '1px solid #e2e8f0', background: '#fff', color: '#64748b', cursor: 'pointer', fontSize: 13 }}>
+        취소
+      </button>
+    </div>
+  )
 
   const handleTypeChange = (t) => {
     setInputMode('supply')
@@ -468,10 +599,14 @@ function TransactionModal({ tx, clients, projects, crew, onClose, onSave }) {
             </FormRow>
           ) : (
             <FormRow label="거래처">
-              <Select value={form.client_id} onChange={e => set('client_id', e.target.value)}>
-                <option value="">선택 안 함</option>
-                {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </Select>
+              {inlineNew === 'client' ? InlineNewBox : (
+                <Select value={form.client_id}
+                  onChange={e => e.target.value === '__new__' ? startInlineNew('client') : set('client_id', e.target.value)}>
+                  <option value="">선택 안 함</option>
+                  {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  <option value="__new__">+ 새 거래처 등록</option>
+                </Select>
+              )}
             </FormRow>
           )}
         </div>
@@ -483,10 +618,14 @@ function TransactionModal({ tx, clients, projects, crew, onClose, onSave }) {
         </FormRow>
 
         <FormRow label="프로젝트">
-          <Select value={form.project_id} onChange={e => set('project_id', e.target.value)}>
-            <option value="">선택 안 함</option>
-            {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </Select>
+          {inlineNew === 'project' ? InlineNewBox : (
+            <Select value={form.project_id}
+              onChange={e => e.target.value === '__new__' ? startInlineNew('project') : set('project_id', e.target.value)}>
+              <option value="">선택 안 함</option>
+              {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              <option value="__new__">+ 새 프로젝트 등록</option>
+            </Select>
+          )}
         </FormRow>
 
         {isLabor ? (

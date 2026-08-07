@@ -19,6 +19,10 @@ function App() {
   const [session, setSession] = useState(null)
   const [authLoading, setAuthLoading] = useState(true)
   const [page, setPage] = useState('dashboard')
+  const [preset, setPreset] = useState(null)
+
+  // 페이지 이동 + 필터 프리셋 전달 (대시보드 딥링크용)
+  const navigate = (p, ps = null) => { setPreset(ps); setPage(p) }
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -53,11 +57,11 @@ function App() {
 
   const renderPage = () => {
     switch (page) {
-      case 'dashboard': return <Dashboard onNavigate={setPage} />
-      case 'transactions': return <Transactions />
-      case 'projects': return <Projects />
+      case 'dashboard': return <Dashboard onNavigate={navigate} />
+      case 'transactions': return <Transactions preset={preset} />
+      case 'projects': return <Projects preset={preset} />
       case 'clients': return <Clients />
-      case 'quotes': return <Quotes />
+      case 'quotes': return <Quotes preset={preset} />
       case 'crew': return <Crew />
       case 'withholding': return <WithholdingTax />
       case 'fixed': return <FixedExpenses />
@@ -66,7 +70,7 @@ function App() {
   }
 
   return (
-    <Layout page={page} setPage={setPage} session={session}>
+    <Layout page={page} setPage={(p) => navigate(p)} session={session}>
       {renderPage()}
     </Layout>
   )

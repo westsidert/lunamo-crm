@@ -5,12 +5,14 @@ import Modal, { FormRow, Input, Select, Textarea, FormActions } from '../compone
 
 const EMPTY = { name: '', client_id: '', status: '진행중', start_date: '', end_date: '', description: '', total_budget: '' }
 
-export default function Projects() {
+export default function Projects({ preset }) {
   const [projects, setProjects] = useState([])
   const [clients, setClients] = useState([])
   const [transactions, setTransactions] = useState([])
   const [modal, setModal] = useState(null)
   const [loading, setLoading] = useState(true)
+  // 마감 임박(7일 내)·지연 프로젝트만 보기 (대시보드 딥링크 프리셋)
+  const [dueOnly, setDueOnly] = useState(!!preset?.due)
 
   useEffect(() => { loadAll() }, [])
 
@@ -35,10 +37,19 @@ export default function Projects() {
     return { sales, purchase, labor, profit, margin }
   }
 
+  // 마감 임박(7일 내) 또는 지연된 진행중 프로젝트 판정
+  const isDueSoon = (p) => {
+    if (!p.end_date || p.status !== '진행중') return false
+    const today = new Date(); today.setHours(0, 0, 0, 0)
+    const diff = Math.floor((today - new Date(p.end_date)) / 86400000)
+    return diff >= -7
+  }
+  const dueCount = projects.filter(isDueSoon).length
+
   // 칸반 컬럼 정의 (사용자 요청 순서)
   const KANBAN_COLS = ['진행중', '보류', '취소', '완료']
   const colData = KANBAN_COLS.map(status => {
-    const items = projects.filter(p => p.status === status)
+    const items = projects.filter(p => p.status === status && (!dueOnly || isDueSoon(p)))
     const totalBudget = items.reduce((s, p) => s + (Number(p.total_budget) || 0), 0)
     return { status, items, totalBudget }
   })
@@ -75,7 +86,17 @@ export default function Projects() {
           <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0f172a' }}>프로젝트</h1>
           <p style={{ color: '#64748b', marginTop: 4, fontSize: 13 }}>{projects.length}개 프로젝트</p>
         </div>
-        <button onClick={() => setModal('create')} style={btnPrimary}>+ 프로젝트 추가</button>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button onClick={() => setDueOnly(v => !v)} style={{
+            padding: '7px 16px', borderRadius: 20, fontSize: 13, fontWeight: 600, cursor: 'pointer',
+            border: `1.5px solid ${dueOnly ? '#dc2626' : '#e2e8f0'}`,
+            background: dueOnly ? '#fef2f2' : '#fff',
+            color: dueOnly ? '#dc2626' : '#94a3b8',
+          }}>
+            ⏰ 마감 임박·지연 <span style={{ fontWeight: 700 }}>{dueCount}</span>
+          </button>
+          <button onClick={() => setModal('create')} style={btnPrimary}>+ 프로젝트 추가</button>
+        </div>
       </div>
 
       {/* 칸반 보드 */}

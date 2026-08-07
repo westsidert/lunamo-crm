@@ -153,6 +153,18 @@ export const updateTransactionsStatus = async (ids, payment_status) => {
   return data
 }
 
+// 여러 거래의 세금계산서(증빙) 발행 여부 일괄 변경
+export const updateTransactionsInvoice = async (ids, invoice_issued) => {
+  if (!ids?.length) return []
+  const { data, error } = await supabase
+    .from('transactions')
+    .update({ invoice_issued })
+    .in('id', ids)
+    .select('*, clients(name), projects(name), crew(name, account)')
+  if (error) throw error
+  return data
+}
+
 export const createTransactions = async (txList) => {
   const { data, error } = await supabase
     .from('transactions')
