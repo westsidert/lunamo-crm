@@ -37,9 +37,20 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: fetchError.message })
   }
 
-  // 종료일 필터
+  // 결제 주기 판정: 연간/분기 결제는 해당 결제월에만 1회 생성 (분할 없음)
+  // 기준월 = billing_month, 없으면 start_date의 월
+  const isCycleDue = (fe) => {
+    const cycle = fe.billing_cycle || '월간'
+    if (cycle === '월간') return true
+    const anchor = fe.billing_month || (fe.start_date ? Number(fe.start_date.slice(5, 7)) : 1)
+    if (cycle === '연간') return month === anchor
+    if (cycle === '분기') return ((month - anchor) % 3 + 3) % 3 === 0
+    return true
+  }
+
+  // 종료일 + 결제 주기 필터
   const dueExpenses = (expenses || []).filter(fe =>
-    !fe.end_date || fe.end_date >= firstOfMonth
+    (!fe.end_date || fe.end_date >= firstOfMonth) && isCycleDue(fe)
   )
 
   if (dueExpenses.length === 0) {
@@ -60,14 +71,31 @@ export default async function handler(req, res) {
   // 각 항목마다 거래 내역 자동 생성
   const results = []
   for (const fe of dueExpenses) {
+    // 중복 방지: 이번 달에 이미 자동 생성된 동일 항목이 있으면 skip (cron 재실행 대비)
+    const { data: dup } = await supabase
+      .from('transactions')
+      .select('id')
+      .eq('item', fe.name)
+      .like('memo', '[자동]%')
+      .gte('transaction_date', firstOfMonth)
+      .lte('transaction_date', lastOfMonth)
+      .limit(1)
+    if (dup?.length) {
+      results.push({ name: fe.name, success: true, skipped: '이번 달 이미 생성됨' })
+      continue
+    }
+
     const total = Math.round(fe.usd_amount * rate)
     const supply = Math.round(total / 1.1)
     const vat = total - supply
+    const cycleLabel = fe.billing_cycle === '연간' ? `${year}년 연간 결제`
+      : fe.billing_cycle === '분기' ? `${label} 분기 결제`
+      : label
 
     const { data, error } = await supabase.from('transactions').insert({
       type: '매입',
       item: fe.name,
-      memo: `[자동] ${fe.name} ${label} (USD $${fe.usd_amount} × ${rate.toLocaleString()}원)`,
+      memo: `[자동] ${fe.name} ${cycleLabel} (USD $${fe.usd_amount} × ${rate.toLocaleString()}원)`,
       transaction_date: dateStr,
       supply_amount: supply,
       vat,
