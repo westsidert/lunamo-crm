@@ -34,6 +34,106 @@ const ALL_ITEMS = [
   { cat: 'Post-production',sub: '믹싱',   name: '음악',         price: 300000 },
 ]
 
+const AI_MODEL = 'claude-opus-5-5'
+
+// 가견적 응답 스키마 (structured outputs) - 정규식 JSON 추출 대신 API가 형식을 보장
+const QUOTE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['project_title', 'items', 'note'],
+  properties: {
+    project_title: { type: 'string' },
+    items: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['cat', 'sub', 'name', 'day', 'qty', 'price'],
+        properties: {
+          cat: { enum: ['Pre-production', 'production', 'Post-production', '기타'] },
+          sub: { type: 'string' },
+          name: { type: 'string' },
+          day: { type: 'integer' },
+          qty: { type: 'integer' },
+          price: { type: 'number' },
+        },
+      },
+    },
+    note: { type: 'string' },
+  },
+}
+
+// Anthropic 호출: 일시 오류(429/5xx/529) 백오프 재시도, 거절·빈 응답·항목 0개는 실패로 반환
+async function requestQuoteFromAI(system, userMsg) {
+  const RETRYABLE = [429, 500, 502, 503, 529]
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms))
+  const body = JSON.stringify({
+    model: AI_MODEL,
+    max_tokens: 16000,
+    output_config: { effort: 'high', format: { type: 'json_schema', schema: QUOTE_SCHEMA } },
+    fallbacks: 'default',
+    system,
+    messages: [{ role: 'user', content: userMsg }],
+  })
+
+  let aiRes
+  for (let attempt = 0; ; attempt++) {
+    try {
+      aiRes = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': process.env.ANTHROPIC_API_KEY,
+          'anthropic-version': '2023-06-01',
+          'anthropic-beta': 'server-side-fallback-2026-07-01',
+        },
+        body,
+      })
+    } catch (e) {
+      if (attempt >= 2) return { ok: false, error: `네트워크 오류: ${e.message}` }
+      await sleep((attempt + 1) * 2000)
+      continue
+    }
+    if (RETRYABLE.includes(aiRes.status) && attempt < 2) {
+      console.warn(`[inquiry] AI ${aiRes.status} - ${attempt + 1}회 재시도`)
+      await sleep((attempt + 1) * 2000)
+      continue
+    }
+    break
+  }
+
+  if (!aiRes.ok) {
+    const err = await aiRes.json().catch(() => ({}))
+    return { ok: false, error: `Anthropic API ${aiRes.status}: ${err.error?.message || '응답 없음'}` }
+  }
+  const data = await aiRes.json()
+  if (data.stop_reason === 'refusal') {
+    return { ok: false, error: `AI 거절 (${data.stop_details?.category || '사유 미상'})` }
+  }
+  const textBlock = (data.content || []).find(b => b.type === 'text')
+  if (!textBlock?.text) {
+    return { ok: false, error: data.stop_reason === 'max_tokens' ? 'AI 응답이 길이 제한에 걸림' : 'AI 응답 비어 있음' }
+  }
+  let parsed
+  try {
+    parsed = JSON.parse(textBlock.text)
+  } catch (e) {
+    return { ok: false, error: `JSON 파싱 실패: ${e.message} | 원문: ${textBlock.text.slice(0, 200)}` }
+  }
+  if (!Array.isArray(parsed.items) || parsed.items.length === 0) {
+    return { ok: false, error: 'AI가 견적 항목을 하나도 산출하지 않음' }
+  }
+  const bad = parsed.items.find(it => !(it.day >= 1 && it.qty >= 1 && it.price > 0))
+  if (bad) {
+    return { ok: false, error: `항목 값 비정상: ${bad.name} (day ${bad.day}, qty ${bad.qty}, price ${bad.price})` }
+  }
+  const total = parsed.items.reduce((s, it) => s + it.day * it.qty * it.price, 0)
+  if (!(total > 0)) {
+    return { ok: false, error: 'AI 산출 합계가 0원' }
+  }
+  return { ok: true, data: parsed, usage: data.usage }
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end()
 
@@ -121,17 +221,7 @@ async function processInquiry(body) {
       ].filter(Boolean).join('\n')
     : `폼 데이터 원문:\n${rawDump}`
 
-  const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': process.env.ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
-      model: 'claude-opus-4-6',
-      max_tokens: 1024,
-      system: `당신은 루나모 영상 프로덕션의 견적 AI입니다.
+  const system = `당신은 루나모 영상 프로덕션의 견적 AI입니다.
 고객 문의 내용을 분석하여 적합한 견적 항목과 금액을 추천합니다.
 루나모는 부산 기반 영상 제작사로 기업홍보, 스케치, 광고, 유튜브 콘텐츠 등을 제작합니다.
 
@@ -181,40 +271,19 @@ ${itemsDesc}
 - 실내 일반 촬영은 조명장비·그립장비 제외 (특수 조명 필요 시 포함)
 - 과잉 견적 금지 — 실제로 필요한 항목만 포함
 
-## 응답 규칙
-- 반드시 JSON만 응답 (코드블록·설명 없음)
+## 금액 산정 규칙 (중요)
+- 각 항목의 금액은 day × qty × price 로 계산된다
+- price는 반드시 "1일(1회) 단가"다. 일수나 수량을 price에 미리 곱하지 말 것
+  - 예: 기획 3일이면 day:3, qty:1, price:300000 (price에 900000을 넣으면 안 됨)
 - day·qty는 양의 정수, price는 숫자
 - project_title: 프로젝트 제목 (업체명 + 영상 유형)
+- note: 산정 근거를 2~4문장으로`
 
-## 응답 형식
-{"project_title":"업체명 기업홍보영상","items":[{"cat":"Pre-production","sub":"기획","name":"기획료","day":1,"qty":1,"price":300000}],"note":"산정 근거"}`,
-      messages: [{ role: 'user', content: `다음 의뢰를 분석하여 가견적을 산출해주세요:\n\n${userMsg}` }],
-    }),
-  })
-
-  let aiData = { project_title: `${company || '신규'} 영상 제작`, items: [], note: '' }
-  console.log('[inquiry] AI 응답 status:', aiRes.status)
-  if (aiRes.ok) {
-    const aiJson = await aiRes.json()
-    const raw = aiJson.content?.[0]?.text || ''
-    // 마크다운 코드블록 제거 후 JSON 추출
-    const text = raw.replace(/^```[\w]*\n?/m, '').replace(/```\s*$/m, '').trim()
-    console.log('[inquiry] AI 응답 텍스트(정리후):', text.slice(0, 200))
-    const match = text.match(/\{[\s\S]*\}/)
-    if (match) {
-      try {
-        aiData = JSON.parse(match[0])
-      } catch (parseErr) {
-        console.error('[inquiry] JSON 파싱 실패:', parseErr.message, '| 원문:', text.slice(0, 200))
-      }
-    } else {
-      console.error('[inquiry] JSON 블록 없음, 원문:', text.slice(0, 300))
-    }
-  } else {
-    const errText = await aiRes.text().catch(() => '')
-    console.error('[inquiry] AI 호출 실패:', aiRes.status, errText.slice(0, 300))
-  }
-  console.log('[inquiry] aiData.items 수:', aiData.items?.length, '| project_title:', aiData.project_title)
+  const ai = await requestQuoteFromAI(system, `다음 의뢰를 분석하여 가견적을 산출해주세요:\n\n${userMsg}`)
+  const aiFailed = ai.ok ? null : ai.error
+  const aiData = ai.ok ? ai.data : { project_title: `${company || '신규'} 영상 제작`, items: [], note: '' }
+  if (aiFailed) console.error('[inquiry] AI 가견적 실패:', aiFailed)
+  else console.log('[inquiry] AI 가견적 성공 - 항목', aiData.items.length, '건 | tokens:', JSON.stringify(ai.usage))
 
   // 2. 거래처 upsert (업체명으로 조회, 없으면 생성)
   let clientId = null
@@ -256,6 +325,10 @@ ${itemsDesc}
   quotePayload.total_with_vat = Math.round(subTotal * 1.1)
   quotePayload.final_amount = Math.round(subTotal * 1.1)
   quotePayload.status = '작성중'
+  // memo는 고객용 견적서 하단에 인쇄되는 필드라 실패 사유는 제목 접두어와 이메일에만 남긴다
+  if (aiFailed) {
+    quotePayload.project_title = `[AI견적 실패-수동작성] ${quotePayload.project_title}`
+  }
 
   console.log('[inquiry] quote insert payload:', JSON.stringify(quotePayload))
 
@@ -278,9 +351,11 @@ ${itemsDesc}
       sort_order: i,
       category: it.cat,
       contents: it.name,
+      preset_key: `${it.cat}|${it.sub}|${it.name}`,
       day: it.day || 1,
       qty: it.qty || 1,
       each_price: it.price || 0,
+      sum: (it.day || 1) * (it.qty || 1) * (it.price || 0),
     }))
     const { error: iErr } = await supabase.from('quote_items').insert(quoteItems)
     if (iErr) console.error('[inquiry] quote_items insert 실패:', iErr)
@@ -325,7 +400,7 @@ ${itemsDesc}
 <div class="card">
   <div class="header">
     <h2>📬 새 의뢰가 접수되었습니다</h2>
-    <p>AI가 자동으로 가견적을 생성했습니다 · LUNAMO CRM</p>
+    <p>${aiFailed ? 'AI 가견적 생성에 실패했습니다 - 수동 작성 필요' : 'AI가 자동으로 가견적을 생성했습니다'} · LUNAMO CRM</p>
   </div>
   <div class="body">
     <div class="info">
@@ -338,6 +413,12 @@ ${itemsDesc}
       <span style="color:#374151;white-space:pre-line;">${esc(content || '없음')}</span>
     </div>
 
+    ${aiFailed ? `
+    <div style="padding:14px 16px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;font-size:13px;color:#b91c1c;line-height:1.7;">
+      <strong>⚠ AI 가견적 생성 실패 - 수동 작성이 필요합니다</strong><br>
+      사유: ${esc(aiFailed)}<br>
+      <span style="color:#7f1d1d;">견적서 초안(0원, 작성중)은 CRM에 저장되어 있으니 열어서 항목을 직접 입력해주세요.</span>
+    </div>` : `
     <p style="font-size:13px;font-weight:600;color:#0f172a;margin-bottom:12px;">📊 AI 가견적 — ${esc(aiData.project_title)}</p>
     <table>
       <thead>
@@ -347,7 +428,7 @@ ${itemsDesc}
     </table>
     <div class="total">공급가액: ${fmt(subTotal)}원 → 부가세 포함 ${fmt(Math.round(subTotal * 1.1))}원</div>
 
-    ${aiData.note ? `<div class="note">💡 ${esc(aiData.note)}</div>` : ''}
+    ${aiData.note ? `<div class="note">💡 ${esc(aiData.note)}</div>` : ''}`}
 
     <div class="cta">
       <a href="${process.env.VITE_APP_URL || 'https://lunamo-crm.vercel.app'}">CRM에서 견적서 수정하기 →</a>
@@ -366,7 +447,7 @@ ${itemsDesc}
     body: JSON.stringify({
       from: 'LUNAMO CRM <onboarding@resend.dev>',
       to: [process.env.REPORT_EMAIL],
-      subject: `[LUNAMO] 새 의뢰 — ${company || '신규'} (${field || '문의'})`.replace(/[\r\n]/g, ' '),
+      subject: `${aiFailed ? '[LUNAMO] ⚠ AI 견적 실패 - ' : '[LUNAMO] '}새 의뢰 — ${company || '신규'} (${field || '문의'})`.replace(/[\r\n]/g, ' '),
       html,
     }),
   })
