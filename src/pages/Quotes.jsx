@@ -1353,12 +1353,12 @@ function PrintButton({ meta, values, customItems = [], discount, clients }) {
     const items = selectedItems.filter(i => i.cat === cat)
     return items.map((item, idx) => `
       <tr style="border-bottom:1px solid #f0f0f0;">
-        <td style="padding:7px 8px 7px 0;font-size:12px;color:#777;vertical-align:top;width:90px;">${idx===0?cat:''}</td>
-        <td style="padding:7px 10px;font-size:13px;color:#1a1a1a;">${(item.name || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))}</td>
-        <td style="padding:7px 10px;text-align:right;font-size:13px;">${item.price.toLocaleString('ko-KR')}</td>
-        <td style="padding:7px 10px;text-align:center;font-size:13px;">${item.qty}</td>
-        <td style="padding:7px 10px;text-align:center;font-size:13px;">${item.day}</td>
-        <td style="padding:7px 0 7px 10px;text-align:right;font-size:13px;">${(item.price*item.qty*item.day).toLocaleString('ko-KR')}</td>
+        <td style="padding:6px 8px 6px 0;font-size:12px;color:#777;vertical-align:top;width:90px;">${idx===0?cat:''}</td>
+        <td style="padding:6px 10px;font-size:13px;color:#1a1a1a;">${(item.name || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))}</td>
+        <td style="padding:6px 10px;text-align:right;font-size:13px;">${item.price.toLocaleString('ko-KR')}</td>
+        <td style="padding:6px 10px;text-align:center;font-size:13px;">${item.qty}</td>
+        <td style="padding:6px 10px;text-align:center;font-size:13px;">${item.day}</td>
+        <td style="padding:6px 0 6px 10px;text-align:right;font-size:13px;">${(item.price*item.qty*item.day).toLocaleString('ko-KR')}</td>
       </tr>`).join('')
   }).join('')
 
@@ -1367,7 +1367,7 @@ function PrintButton({ meta, values, customItems = [], discount, clients }) {
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(fileTitle)}</title>
 <style>*{box-sizing:border-box;margin:0;padding:0;}body{font-family:'Apple SD Gothic Neo','Noto Sans KR','Malgun Gothic',sans-serif;background:white;}
 @media print{@page{size:A4;margin:0;}body{margin:0;}}</style></head>
-<body><div style="width:794px;margin:0 auto;padding:56px 60px 80px;background:white;min-height:1123px;display:flex;flex-direction:column;">
+<body><div style="width:794px;margin:0 auto;padding:44px 60px 44px;background:white;min-height:1123px;display:flex;flex-direction:column;">
 <div style="display:flex;justify-content:space-between;align-items:flex-end;padding-bottom:6px;">
   <div style="font-size:38px;font-weight:800;color:#1a1a1a;letter-spacing:-1px;">견적서</div>
   <div style="text-align:right;">${logo ? `<img src="${logo}" style="max-height:48px;max-width:160px;object-fit:contain;display:block;margin-left:auto;"/>` : `<div style="font-size:15px;font-weight:600;">${PROVIDER.name}</div>`}<div style="font-size:12px;color:#777;margin-top:3px;">${PROVIDER.bank}</div></div>
@@ -1380,7 +1380,7 @@ function PrintButton({ meta, values, customItems = [], discount, clients }) {
   <div style="padding:14px 0 14px 16px;"><div style="font-size:11px;color:#999;margin-bottom:4px;">최종 제안가 (VAT 포함)</div><div style="font-size:10px;color:#999;margin-bottom:10px;">( 만원 이하 절사${dcNote} )</div><div style="font-size:38px;font-weight:700;letter-spacing:-1px;line-height:1.1;">${Number(finalAmount).toLocaleString('ko-KR')}</div></div>
 </div>
 <div style="border-top:1px solid #e0e0e0;"></div>
-<div style="margin-top:28px;margin-bottom:24px;font-size:20px;font-weight:600;">${esc(meta.project_title)}</div>
+<div style="margin-top:20px;margin-bottom:16px;font-size:20px;font-weight:600;">${esc(meta.project_title)}</div>
 <table style="width:100%;border-collapse:collapse;">
 <thead><tr style="border-top:1.5px solid #1a1a1a;border-bottom:1.5px solid #1a1a1a;">
   <th style="width:90px;padding:9px 8px 9px 0;text-align:left;font-size:13px;font-weight:700;"></th>
@@ -1390,8 +1390,8 @@ function PrintButton({ meta, values, customItems = [], discount, clients }) {
   <th style="padding:9px 10px;text-align:center;font-size:13px;font-weight:700;">Day</th>
   <th style="padding:9px 0 9px 10px;text-align:right;font-size:13px;font-weight:700;">Sum</th>
 </tr></thead>
-<tbody>${rowsHtml}<tr style="height:40px;"></tr></tbody></table>
-${meta.memo && meta.memo.trim() ? `<div style="margin-top:18px;font-size:12px;color:#1a1a1a;white-space:pre-line;line-height:1.7;">${String(meta.memo).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}</div>` : ''}
+<tbody>${rowsHtml}</tbody></table>
+${meta.memo && meta.memo.trim() ? `<div style="margin-top:14px;font-size:12px;color:#1a1a1a;white-space:pre-line;line-height:1.6;">${String(meta.memo).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}</div>` : ''}
 <div style="border-top:1.5px solid #1a1a1a;padding-top:12px;margin-top:auto;flex-shrink:0;">
   <div style="display:flex;justify-content:space-between;padding:5px 0;"><span style="font-size:12px;color:#555;">Sub total</span><span style="font-size:13px;">${Number(subTotal).toLocaleString('ko-KR')}</span></div>
   <div style="display:flex;justify-content:space-between;padding:5px 0;"><span style="font-size:12px;color:#555;">Total (부가세 포함 금액)</span><span style="font-size:13px;">${Number(totalWithVat).toLocaleString('ko-KR')}</span></div>
