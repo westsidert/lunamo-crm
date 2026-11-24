@@ -12,6 +12,12 @@ export default async function handler(req, res) {
     process.env.SUPABASE_SERVICE_ROLE_KEY,
   )
 
+  // 실행 흔적 기록 (크론이 매일 DB까지 도달하는지 사후 확인용)
+  const logRun = async (status, detail) => {
+    const { error } = await supabase.from('cron_runs').insert({ job: 'auto-expense', status, detail })
+    if (error) console.error('cron_runs 기록 실패:', error)
+  }
+
   // 오늘 날짜 (KST 기준)
   const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Seoul' }))
   const today = now.getDate()
@@ -34,6 +40,7 @@ export default async function handler(req, res) {
 
   if (fetchError) {
     console.error('fixed_expenses 조회 실패:', fetchError)
+    await logRun('error', `fixed_expenses 조회 실패: ${fetchError.message}`)
     return res.status(500).json({ error: fetchError.message })
   }
 
@@ -54,6 +61,7 @@ export default async function handler(req, res) {
   )
 
   if (dueExpenses.length === 0) {
+    await logRun('ok', '오늘 결제일인 USD 항목 없음')
     return res.status(200).json({ message: '오늘 결제일인 USD 항목 없음', date: dateStr })
   }
 
@@ -65,6 +73,7 @@ export default async function handler(req, res) {
     rate = Math.round(rateData.rates.KRW)
   } catch (e) {
     console.error('환율 조회 실패:', e)
+    await logRun('error', '환율 조회 실패')
     return res.status(500).json({ error: '환율 조회 실패' })
   }
 
@@ -111,6 +120,10 @@ export default async function handler(req, res) {
       results.push({ name: fe.name, success: true, usd: fe.usd_amount, rate, krw: total })
     }
   }
+
+  const failed = results.filter(r => !r.success)
+  await logRun(failed.length ? 'error' : 'ok',
+    results.map(r => `${r.name}: ${r.success ? (r.skipped || '생성') : r.error}`).join(' / '))
 
   return res.status(200).json({ date: dateStr, rate, results })
 }
